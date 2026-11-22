@@ -1,0 +1,6 @@
+/** Creates the attempt values shared by every prover on one HTTP attempt. */
+export declare function create(): {
+    readonly created: number;
+    readonly nonce: string;
+};
+//# sourceMappingURL=SigningContext.d.ts.map

@@ -1,0 +1,73 @@
+import {copyFetchMetadata, resolveRequestUrlSymbol} from './utilities.js';
+
+export function withSearchParameters(defaultSearchParameters) {
+	const defaults = new URLSearchParams(defaultSearchParameters);
+
+	return fetchFunction => {
+		const mergeSearchParameters = existingParameters => {
+			const merged = new URLSearchParams(defaults);
+
+			// Per-call URL parameters override defaults (like withHeaders)
+			for (const key of existingParameters.keys()) {
+				merged.delete(key);
+			}
+
+			for (const [key, value] of existingParameters) {
+				merged.append(key, value);
+			}
+
+			return merged;
+		};
+
+		const applyToUrl = url => {
+			const merged = mergeSearchParameters(url.searchParams);
+			const newUrl = new URL(url);
+			newUrl.search = merged.toString();
+			return newUrl;
+		};
+
+		const resolveRequestUrlWithSearchParameters = urlOrRequest => {
+			if (urlOrRequest instanceof URL) {
+				return applyToUrl(urlOrRequest).href;
+			}
+
+			if (typeof urlOrRequest !== 'string') {
+				return urlOrRequest instanceof Request ? urlOrRequest.url : String(urlOrRequest);
+			}
+
+			const resolvedRequestUrl = fetchFunction[resolveRequestUrlSymbol]?.(urlOrRequest) ?? urlOrRequest;
+			const resolvedUrl = resolvedRequestUrl instanceof Request ? resolvedRequestUrl.url : String(resolvedRequestUrl);
+
+			if (/^[a-z][a-z\d+\-.]*:/i.test(resolvedUrl)) {
+				return applyToUrl(new URL(resolvedUrl)).href;
+			}
+
+			const hashIndex = resolvedUrl.indexOf('#');
+			const fragment = hashIndex === -1 ? '' : resolvedUrl.slice(hashIndex);
+			const urlWithoutFragment = hashIndex === -1 ? resolvedUrl : resolvedUrl.slice(0, hashIndex);
+
+			const questionIndex = urlWithoutFragment.indexOf('?');
+			const urlBase = questionIndex === -1 ? urlWithoutFragment : urlWithoutFragment.slice(0, questionIndex);
+			const existingSearch = questionIndex === -1 ? '' : urlWithoutFragment.slice(questionIndex + 1);
+
+			const merged = mergeSearchParameters(new URLSearchParams(existingSearch));
+			const search = merged.toString();
+			return urlBase + (search ? `?${search}` : '') + fragment;
+		};
+
+		const fetchWithSearchParameters = async (urlOrRequest, options = {}) => {
+			if (urlOrRequest instanceof URL) {
+				return fetchFunction(applyToUrl(urlOrRequest), options);
+			}
+
+			return fetchFunction(
+				typeof urlOrRequest === 'string' ? resolveRequestUrlWithSearchParameters(urlOrRequest) : urlOrRequest,
+				options,
+			);
+		};
+
+		fetchWithSearchParameters[resolveRequestUrlSymbol] = resolveRequestUrlWithSearchParameters;
+
+		return copyFetchMetadata(fetchWithSearchParameters, fetchFunction);
+	};
+}

@@ -1,0 +1,129 @@
+// What Ghost reads on a post or page write, minus `newsletter` and `email_segment`, which send
+// the post as email, `source=html`, which turns HTML into the post's content as it is, and the
+// rest of what only Admin's editor needs.
+const POST_WRITE_PARAMETERS = ['include', 'formats', 'save_revision'];
+export const ADMIN_API_ALLOWLIST = [
+    {
+        name: 'posts:read',
+        description: 'List and read posts, and search them.',
+        routes: ['GET /posts', 'GET /posts/:id', 'GET /posts/slug/:slug', 'GET /search-index/posts'],
+    },
+    {
+        name: 'posts:write',
+        description: 'Create, edit and delete posts, one at a time, without email or code injection.',
+        routes: ['POST /posts', 'PUT /posts/:id', 'DELETE /posts/:id'],
+        allowedParameters: POST_WRITE_PARAMETERS,
+        checksContent: true,
+    },
+    {
+        name: 'pages:read',
+        description: 'List and read pages, and search them.',
+        routes: ['GET /pages', 'GET /pages/:id', 'GET /pages/slug/:slug', 'GET /search-index/pages'],
+    },
+    {
+        name: 'pages:write',
+        description: 'Create, edit and delete pages, one at a time, without code injection.',
+        routes: ['POST /pages', 'PUT /pages/:id', 'DELETE /pages/:id'],
+        allowedParameters: POST_WRITE_PARAMETERS,
+        checksContent: true,
+    },
+    {
+        name: 'tags:read',
+        description: 'List and read tags, and search them.',
+        routes: ['GET /tags', 'GET /tags/:id', 'GET /tags/slug/:slug', 'GET /search-index/tags'],
+    },
+    {
+        name: 'tags:write',
+        description: 'Create, edit and delete tags, one at a time, without code injection.',
+        routes: ['POST /tags', 'PUT /tags/:id', 'DELETE /tags/:id'],
+        allowedParameters: ['include'],
+        checksContent: true,
+    },
+    {
+        name: 'users:read',
+        description: 'List staff users, to show who wrote something.',
+        routes: ['GET /users'],
+    },
+    {
+        name: 'tiers:read',
+        description: 'List tiers, to show who can read something.',
+        routes: ['GET /tiers'],
+    },
+    {
+        name: 'newsletters:read',
+        description: 'List newsletters.',
+        routes: ['GET /newsletters'],
+    },
+    {
+        name: 'site:read',
+        description: 'Read the public details of the site, such as its logo, icon and accent colour.',
+        routes: ['GET /site'],
+    },
+    {
+        name: 'slugs:read',
+        description: 'Ask Ghost for an unused slug, as the editor does before saving.',
+        routes: ['GET /slugs/:type/:name', 'GET /slugs/:type/:name/:id'],
+    },
+];
+const OBJECT_ID = /^[0-9a-f]{24}$/;
+const ROUTES = ADMIN_API_ALLOWLIST.flatMap((scope) => scope.routes.map((route) => {
+    const [method = '', path = ''] = route.split(' ');
+    return {
+        method,
+        route,
+        scope,
+        segments: path
+            .split('/')
+            .filter(Boolean)
+            .map((segment) => {
+            if (segment === ':id') {
+                return { kind: 'id' };
+            }
+            return segment.startsWith(':') ? { kind: 'any' } : { kind: 'fixed', value: segment };
+        }),
+    };
+}));
+const OPAQUE_SEGMENT = /^\.{1,2}$/;
+// Matches the path's segments as they arrive. A parameter is decoded before it's checked, as
+// Ghost's router decodes it, and mustn't decode to `.`, `..` or a separator; a fixed segment
+// isn't decoded, as the router matches it escaped.
+function matches(route, segments) {
+    return (route.segments.length === segments.length &&
+        route.segments.every((part, index) => {
+            const segment = segments[index];
+            if (part.kind === 'fixed') {
+                return part.value === segment.toLowerCase();
+            }
+            if (part.kind === 'id') {
+                return OBJECT_ID.test(segment);
+            }
+            try {
+                const decoded = decodeURIComponent(segment);
+                return !OPAQUE_SEGMENT.test(decoded) && !/[/\\]/.test(decoded);
+            }
+            catch {
+                return false;
+            }
+        }));
+}
+/**
+ * Finds the allowlist route a request to an Admin API path with this method matches, or
+ * returns `undefined` when apps can't make it. Takes a pathname relative to the Admin API root,
+ * such as `/posts/`, without the query.
+ *
+ * A path matches nothing if it has an empty segment, other than the trailing `/`, or a segment
+ * that is `.` or `..`, written out or escaped, because where such a path leads depends on which
+ * parser reads it.
+ */
+export function findAllowedAdminApiRoute(pathname, method) {
+    if (!pathname.startsWith('/')) {
+        return undefined;
+    }
+    const segments = pathname.slice(1).replace(/\/$/, '').split('/');
+    if (segments.some((segment) => segment === '' || OPAQUE_SEGMENT.test(segment))) {
+        return undefined;
+    }
+    const route = ROUTES.find((each) => each.method === method && matches(each, segments));
+    return route && { route: route.route, scope: route.scope };
+}
+//# sourceMappingURL=allowlist.js.map

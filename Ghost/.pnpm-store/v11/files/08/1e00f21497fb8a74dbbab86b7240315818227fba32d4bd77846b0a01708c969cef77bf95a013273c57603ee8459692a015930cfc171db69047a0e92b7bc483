@@ -1,0 +1,48 @@
+/**
+ * Ghost's checkout ports: the fixed names a checkout collects values under, whichever page asks
+ * for them. A binding points a port at the custom field its values are kept in.
+ */
+export const CHECKOUT_PORT = {
+    shippingAddress: 'checkout.shipping.address',
+    shippingName: 'checkout.shipping.name',
+    phone: 'checkout.phone',
+};
+/**
+ * What a tier can require its members to give, named as the checkout settings name the part
+ * that collects it, with the port each of its answers is collected under, by the role it plays.
+ * A client lays a requirement out by its roles and sends each answer by its port, so it never
+ * needs a port's name. A requirement is asked for while each of its ports is bound to a custom
+ * field, whether or not that field is archived: an answer for an archived field is dropped, so
+ * archiving a field never changes what members are asked.
+ */
+export const REQUIREMENTS = {
+    shipping: { recipient: CHECKOUT_PORT.shippingName, address: CHECKOUT_PORT.shippingAddress },
+    phone: { number: CHECKOUT_PORT.phone },
+};
+/** The ports this requirement's answers are collected under. */
+export function portsOf(name) {
+    const roles = REQUIREMENTS[name];
+    return Object.values(roles);
+}
+/**
+ * Does with a requirement what the handler for its name does. A requirement added above fails to
+ * compile here until it's handled, and then wherever this is called until it has a handler.
+ */
+export function matchRequirement(requirement, handlers) {
+    switch (requirement.name) {
+        case 'shipping':
+            return handlers.shipping(requirement);
+        case 'phone':
+            return handlers.phone(requirement);
+    }
+}
+export function isRequirementName(name) {
+    return Object.hasOwn(REQUIREMENTS, name);
+}
+export const CHECKOUT_PORTS = Object.keys(REQUIREMENTS)
+    .filter(isRequirementName)
+    .flatMap(portsOf);
+export function isCheckoutPort(key) {
+    return CHECKOUT_PORTS.some((port) => port === key);
+}
+//# sourceMappingURL=field-ports.js.map

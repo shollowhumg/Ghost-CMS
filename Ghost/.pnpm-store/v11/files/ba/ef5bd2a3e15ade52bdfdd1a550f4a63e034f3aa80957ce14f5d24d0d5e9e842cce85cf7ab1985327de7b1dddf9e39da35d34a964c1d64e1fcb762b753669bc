@@ -1,0 +1,58 @@
+import { z } from 'zod';
+export declare const FRAGMENT_PROBLEM = "Expected a URL without a fragment";
+/**
+ * Whether an address carries a fragment, even an empty one, which the parsed URL's `hash`
+ * hides. A fragment never reaches the server, so a manifest address with one is a mistake or
+ * a second spelling of the same address.
+ */
+export declare const hasFragment: (address: string) => boolean;
+/**
+ * Checks a URL once the URL parser has read it, so the rules apply to the URL Ghost would
+ * use. The length is measured on the parsed URL for the same reason, as that is what is
+ * stored and checked again later.
+ */
+export declare function checkResolvedUrl(url: URL, allowLocalhost: boolean): string | null;
+export interface UrlRules {
+    allowLocalhost: boolean;
+    /**
+     * The address the manifest was fetched from, already checked and so off Ghost's hosts,
+     * which the paths in it resolve against.
+     */
+    base: string;
+}
+/**
+ * How the manifest's shape gets its URL fields: one rule for every URL in it, asked once
+ * per field. `linkOnly` marks a URL that is only ever linked to, never loaded.
+ */
+export type UrlField = (linkOnly?: boolean) => z.ZodType<string, string>;
+/**
+ * A URL in the manifest. What Ghost loads is written as a path, resolved against the
+ * address the manifest was fetched from, so an app is one origin: the one Ghost fetches
+ * the manifest from and challenges is the one every surface runs on. The manifest names
+ * that address as its signed `manifest_url`, so the resolved URLs are as fixed as if they
+ * were written out. `parseManifestUrl` keeps that origin off Ghost's hosts.
+ *
+ * `linkOnly` marks a URL that is only ever linked to, never loaded, which is absolute and
+ * may be anywhere, the publisher's own site included.
+ *
+ * A loaded URL's path, query and fragment must also make a path `isContainedPath` accepts.
+ * Admin opens the app there, as its entry route, and the SDK refuses a route that isn't one.
+ * Resolving can still give one that isn't: `/.//admin` resolves to the path `//admin`, which
+ * names a host, and a `\` in the query or fragment is left as it is. Only the page is opened
+ * as a route, but every URL Ghost loads is held to the one rule.
+ */
+export declare function urlField({ allowLocalhost, base }: UrlRules, linkOnly?: boolean): z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>;
+/**
+ * A link to an app's developer: a URL as `url(true)` holds it, or a `mailto:` link to one email
+ * address. Ghost only ever links to it. A `mailto:` link takes no query or fragment, not even an
+ * empty one, so it can't prefill a message or add recipients. The address is checked as a mail
+ * client decodes it, so an escaped `,` can't add a second one.
+ */
+export declare function contactField(url: UrlField): z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>;
+/**
+ * A URL as a manifest holds it once `parseManifest` has accepted it: absolute, and
+ * already checked. Nothing is resolved or checked again, so a manifest accepted before the
+ * site's URL changed still reads back.
+ */
+export declare const absoluteUrl: UrlField;
+//# sourceMappingURL=url.d.ts.map

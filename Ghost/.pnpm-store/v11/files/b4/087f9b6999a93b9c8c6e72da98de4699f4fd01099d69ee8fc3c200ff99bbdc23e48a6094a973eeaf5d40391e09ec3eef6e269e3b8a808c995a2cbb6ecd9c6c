@@ -1,0 +1,230 @@
+import { Signature } from 'ox';
+import { TempoAddress } from 'ox/tempo';
+import type { Hex } from 'viem';
+import type { Account } from 'viem';
+import { Transaction } from 'viem/tempo';
+/** Returns true if the serialized transaction has a Tempo envelope prefix. */
+export declare function isTempoTransaction(serialized: string | undefined): boolean;
+/**
+ * Allowed call patterns for fee-payer sponsored transactions.
+ * Each inner array is an ordered list of function selectors.
+ */
+export declare const callScopes: `0x${string}`[][];
+export type Policy = {
+    maxGas: bigint;
+    maxFeePerGas: bigint;
+    maxPriorityFeePerGas: bigint;
+    maxTotalFee: bigint;
+    maxValidityWindowSeconds: number;
+};
+type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>;
+type ExpectedTransfer = {
+    amount: string;
+    allowAnyMemo?: boolean | undefined;
+    memo?: Hex | undefined;
+    recipient: TempoAddress.Address;
+};
+/** Returns fee tokens that mppx allows sponsored transactions to charge. */
+export declare function defaultAllowedFeeTokens(chainId: number | undefined): `0x${string}`[];
+/** Validates the fee-token address and, when supplied, the server's allowlist. */
+export declare function assertAllowedFeeToken(transaction: {
+    feeToken?: unknown;
+}, allowedFeeTokens?: readonly TempoAddress.Address[] | undefined): void;
+declare function hostedFeePayerRequest(transaction: SponsoredTransaction): {
+    accessList?: any;
+    calls: any;
+    feePayer: boolean;
+    from: any;
+    gas?: `0x${string}` | undefined;
+    keyAuthorization?: any;
+    maxFeePerGas?: `0x${string}` | undefined;
+    maxPriorityFeePerGas?: `0x${string}` | undefined;
+    nonce: `0x${string}`;
+    nonceKey?: `0x${string}` | undefined;
+    type: string;
+    validAfter?: `0x${string}` | undefined;
+    validBefore?: `0x${string}` | undefined;
+};
+/**
+ * Co-signs a sender-signed partial sponsorship envelope through a hosted
+ * fee-payer transport without letting the endpoint mutate sender-committed
+ * transaction fields.
+ *
+ * @returns The serialized co-signed transaction plus the sponsor's recovered
+ *   `feePayer` address and chosen `feeToken`, so callers can pre-broadcast
+ *   simulate the exact transaction the sponsor broadcasts.
+ */
+export declare function fillHostedFeePayerTransaction(parameters: {
+    /** Optional merchant restriction on the hosted sponsor's token choice. */
+    allowedFeeTokens?: readonly TempoAddress.Address[] | undefined;
+    challengeExpires?: string | undefined;
+    chainId: number;
+    details: Record<string, string>;
+    policy?: Partial<Policy> | undefined;
+    request: (args: {
+        method: 'eth_fillTransaction';
+        params: readonly [ReturnType<typeof hostedFeePayerRequest>];
+    }) => Promise<unknown>;
+    transaction: SponsoredTransaction;
+}): Promise<{
+    feePayer: `0x${string}`;
+    feePayerSignature: {
+        readonly r: bigint;
+        readonly s: bigint;
+        readonly yParity: number;
+    };
+    feeToken: TempoAddress.Address;
+    serializedTransaction: `0x${string}`;
+}>;
+/**
+ * Returns a transaction shape suitable for pre-broadcast simulation.
+ *
+ * Sponsored transactions are first simulated as calls from the sender, without
+ * signatures, fee payer or fee token, and with zero fee fields: Tempo nodes
+ * (v1.18+) skip the fee-token balance check for a zero-fee `eth_call`, so the
+ * sender's fee balance is irrelevant. The call keeps the transaction's exact
+ * gas limit and the fields that set its intrinsic gas (nonce, nonce key,
+ * validity window, key authorization, signature type), so it is the gas-bounded
+ * check at the broadcast limit: a transaction whose gas is too low fails here
+ * with out of gas instead of reverting onchain at the sponsor's expense.
+ * Transferred value and call-level balances are still checked by the RPC.
+ */
+export declare function simulationTransaction(transaction: SponsoredTransaction, options: {
+    feePayer: boolean;
+}): any;
+/**
+ * Returns the final fee-sponsored transaction shape for pre-broadcast
+ * simulation.
+ *
+ * Tempo nodes recover the fee payer of an `eth_call` only from
+ * `feePayerSignature`; a bare `feePayer` address is ignored and the sender is
+ * billed instead. Pass the sponsor's signature so the node charges the fee
+ * token to the sponsor, not to a sender that may not hold it. The sender's own
+ * signature is never sent.
+ */
+export declare function sponsoredSimulationTransaction(transaction: SponsoredTransaction, options: {
+    feePayer: TempoAddress.Address;
+    feePayerSignature?: Signature.Signature | undefined;
+    feeToken?: TempoAddress.Address | undefined;
+}): any;
+/** A completed sponsorship envelope that can be simulated before signing or broadcast. */
+export type PreflightSponsorship = {
+    feePayer: TempoAddress.Address;
+    /**
+     * The sponsor's signature over the final envelope. Hosted sponsors return it
+     * from `eth_fillTransaction`; local accounts are signed in `preflightSponsorship`.
+     */
+    feePayerSignature?: Signature.Signature | undefined;
+    feeToken?: TempoAddress.Address | undefined;
+    transaction: SponsoredTransaction;
+};
+/**
+ * Signs the fee-payer payload of a sponsored envelope with a local fee-payer
+ * account, the same payload `Transaction.serialize` signs before broadcast.
+ * Returns `undefined` when the envelope's fee payer cannot sign locally.
+ */
+export declare function signFeePayerSimulation(transaction: SponsoredTransaction): Promise<Signature.Signature | undefined>;
+export declare function preflightSponsorship<sponsorship extends PreflightSponsorship>(parameters: {
+    complete: () => Promise<sponsorship>;
+    /** The fee payer policy the completed transaction was checked against. */
+    policy?: Partial<Policy> | undefined;
+    simulate: (request: Record<string, unknown>) => Promise<unknown>;
+    transaction: SponsoredTransaction;
+}): Promise<sponsorship>;
+/**
+ * Returns the gas limit of a local fee payer's simulation-only copy: the
+ * transaction's gas plus {@link sponsoredSimulationGasBuffer}, clamped to the
+ * fee payer policy's `maxGas` and to `maxTotalFee / maxFeePerGas`, so the
+ * signed copy never exceeds a cap the real transaction is held to.
+ */
+export declare function sponsoredSimulationGas(transaction: Pick<SponsoredTransaction, 'chainId' | 'gas' | 'maxFeePerGas'>, policyOverrides?: Partial<Policy> | undefined): bigint;
+/**
+ * Returns true when a simulation failed only because it ran out of gas.
+ *
+ * Tempo nodes report out of gas as `out of gas: …` (code -32003, shared with
+ * `insufficient fee token balance`) or `intrinsic gas too low` (code -32000),
+ * so this reads the node's own message rather than the code. Only the terminal
+ * RPC failure counts: the deepest `details` in the cause chain (viem's
+ * `RpcRequestError` carries the node's message there), or the deepest message
+ * when no error has details. Wrapper messages are ignored, the match is anchored
+ * to the start of the node's message, and an error carrying revert data is never
+ * treated as gas exhaustion, so a revert reason or wrapper text that merely
+ * mentions gas cannot hide another failure.
+ */
+export declare function isOutOfGasError(error: unknown): boolean;
+/**
+ * Extra gas a local fee payer signs into its simulation-only envelope. Tempo's sponsored
+ * `eth_call` charges more gas than the same transaction uses when mined (about 6,000 for a
+ * session top-up on v1.18.1), so simulating at the signed limit would reject transactions
+ * that succeed onchain. The padding is clamped to the fee payer policy; hosted signatures
+ * cover the client's gas and are simulated as signed. In both cases the gas bound at the
+ * broadcast limit comes from the sender simulation.
+ */
+export declare const sponsoredSimulationGasBuffer = 10000n;
+/**
+ * Validates an allowed fee-payer pattern. Returns the funding currency when the
+ * calls are bound to the expected payment transfers.
+ */
+export declare function validateCalls(calls: readonly {
+    data?: `0x${string}` | undefined;
+    to?: TempoAddress.Address | undefined;
+}[], details: Record<string, string>, options?: {
+    currency?: TempoAddress.Address | undefined;
+    expectedTransfers?: readonly ExpectedTransfer[] | undefined;
+}): TempoAddress.Address | undefined;
+/** Rejects transactions that can expire before sponsorship and submission finish. */
+export declare function assertRemainingValidity(parameters: {
+    details?: Record<string, string> | undefined;
+    now?: Date | undefined;
+    transaction: {
+        validBefore?: number | undefined;
+    };
+}): undefined;
+/** Validates sponsor fee policy limits for a fee-payer transaction. */
+export declare function assertTransactionPolicy(parameters: {
+    challengeExpires?: string | undefined;
+    chainId: number;
+    details: Record<string, string>;
+    now?: Date | undefined;
+    policy?: Partial<Policy> | undefined;
+    transaction: SponsoredTransaction;
+}): {
+    gasLimit: any;
+    maxFeePerGasValue: any;
+    totalFee: bigint;
+    validBeforeValue: any;
+};
+export declare function prepareSponsoredTransaction(parameters: {
+    account: Account;
+    allowedFeeTokens?: readonly TempoAddress.Address[] | undefined;
+    challengeExpires?: string | undefined;
+    chainId: number;
+    details: Record<string, string>;
+    now?: Date | undefined;
+    policy?: Partial<Policy> | undefined;
+    transaction: SponsoredTransaction;
+}): {
+    accessList: any;
+    account: Account;
+    calls: any;
+    chainId: any;
+    feePayer: Account;
+    feeToken?: any;
+    from?: any;
+    gas: any;
+    keyAuthorization?: any;
+    nonce?: any;
+    maxFeePerGas: any;
+    maxPriorityFeePerGas?: any;
+    nonceKey: any;
+    signature?: any;
+    type: 'tempo';
+    validAfter?: any;
+    validBefore: any;
+};
+export declare class FeePayerValidationError extends Error {
+    readonly name = "FeePayerValidationError";
+    constructor(reason: string, details: Record<string, string>);
+}
+export {};
+//# sourceMappingURL=fee-payer.d.ts.map

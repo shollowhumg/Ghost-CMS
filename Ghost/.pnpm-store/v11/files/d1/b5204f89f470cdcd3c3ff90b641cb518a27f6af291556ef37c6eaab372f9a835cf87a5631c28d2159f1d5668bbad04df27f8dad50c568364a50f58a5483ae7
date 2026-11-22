@@ -1,0 +1,3 @@
+import type { PhoneLib } from './phone-lib.ts';
+export declare function phoneLib(): PhoneLib;
+//# sourceMappingURL=phone-lib.node.d.ts.map

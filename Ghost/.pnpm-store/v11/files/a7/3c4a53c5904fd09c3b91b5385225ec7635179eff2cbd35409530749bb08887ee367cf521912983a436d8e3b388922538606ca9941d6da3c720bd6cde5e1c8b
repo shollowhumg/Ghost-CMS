@@ -1,0 +1,19 @@
+import { z } from 'zod';
+import type { UrlField } from './url.ts';
+/** One of the icons Admin ships, by name, or an image the app serves. */
+export type AppIcon = {
+    name: string;
+} | {
+    url: string;
+};
+/**
+ * Ghost draws the icon on the app's accent colour: a named Admin icon or an image the app
+ * serves. Ghost keeps a copy of the image with each manifest version it stores, and only
+ * shows that copy. Unknown names aren't rejected, since they depend on the Admin build;
+ * Admin falls back to a default icon.
+ */
+export declare function iconField(url: UrlField): z.ZodPipe<z.ZodObject<{
+    name: z.ZodOptional<z.ZodString>;
+    url: z.ZodOptional<z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>>;
+}, z.core.$strict>, z.ZodCustom<AppIcon, AppIcon>>;
+//# sourceMappingURL=icon.d.ts.map

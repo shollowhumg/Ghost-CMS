@@ -1,0 +1,74 @@
+{
+  "name": "bookshelf-relations",
+  "version": "3.0.0",
+  "alias": "bookshelf-relations",
+  "description": "Auto update relations",
+  "main": "index.js",
+  "files": [
+    "errors.js",
+    "index.js",
+    "lib"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/TryGhost/bookshelf-relations.git"
+  },
+  "keywords": [
+    "bookshelf",
+    "relations",
+    "relation",
+    "nested",
+    "relationship",
+    "relationships",
+    "associations",
+    "association"
+  ],
+  "author": {
+    "name": "Ghost Foundation",
+    "email": "hello@ghost.org",
+    "web": "https://ghost.org"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.13.1 || >=24.0.0"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/TryGhost/bookshelf-relations/issues"
+  },
+  "devDependencies": {
+    "@tryghost/pro-ship": "1.1.8",
+    "better-sqlite3": "12.11.1",
+    "bookshelf": "1.2.0",
+    "knex": "3.3.0",
+    "knex-migrator": "5.4.1",
+    "mocha": "12.0.0",
+    "mysql2": "3.24.4",
+    "nconf": "0.13.0",
+    "nyc": "18.0.0",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
+    "should": "13.2.3",
+    "sinon": "22.1.0"
+  },
+  "dependencies": {
+    "@tryghost/debug": "^2.3.14",
+    "@tryghost/errors": "^3.3.14",
+    "bluebird": "^3.7.2",
+    "lodash": "^4.18.1"
+  },
+  "peerDependencies": {
+    "bookshelf": ">=1.1.0"
+  },
+  "scripts": {
+    "lint": "oxlint --quiet && oxfmt --check .",
+    "lint:fix": "oxlint --fix && oxfmt .",
+    "format": "oxfmt .",
+    "test": "mocha --exit --timeout 10000 test/integration/*_spec.js test/unit/*_spec.js",
+    "posttest": "pnpm lint",
+    "perf": "mocha --report lcovonly test/perf/*_spec.js",
+    "coverage": "nyc --check-coverage --lines 80 --functions 80 --branches 80 --reporter=lcov --reporter=text-summary mocha --exit test/integration/*_spec.js test/unit/*_spec.js",
+    "test:ci": "pnpm coverage && pnpm lint",
+    "preship": "pnpm test",
+    "ship": "pro-ship"
+  }
+}

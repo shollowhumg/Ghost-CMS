@@ -1,0 +1,47 @@
+# @tryghost/kg-lexical-html-renderer
+
+## 1.5.4
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.5.3
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+- Fixed a text format spreading onto the following text when it ended inside another format, so text that was only italic could render as bold and italic.
+
+- Updated dependencies:
+  - @tryghost/kg-default-nodes@2.3.0
+
+## 1.5.2
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 1.5.1
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.5.0
+
+### Minor Changes
+
+- Update jsdom to 30 & node engines to match jsdom's
+
+### Patch Changes
+
+- Documented the package API and corrected the development instructions in the README
+
+- Updated dependencies:
+  - @tryghost/kg-default-nodes@2.2.0

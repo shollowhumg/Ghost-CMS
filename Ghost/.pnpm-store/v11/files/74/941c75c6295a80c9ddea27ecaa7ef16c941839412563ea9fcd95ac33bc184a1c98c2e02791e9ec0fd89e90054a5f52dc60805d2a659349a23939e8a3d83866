@@ -1,0 +1,1 @@
+{"version":3,"file":"fetch.d.ts","sourceRoot":"","sources":["../../src/bridge/fetch.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,CAAC,EAAE,MAAM,KAAK,CAAC;AAUxB,6FAA6F;AAC7F,eAAO,MAAM,qBAAqB,OAAO,CAAC;AAE1C,8CAA8C;AAC9C,eAAO,MAAM,oBAAoB,QAAc,CAAC;AAyBhD;;;;;;GAMG;AACH,eAAO,MAAM,kBAAkB;;;;;;;;;;kBAiE3B,CAAC;AAEL,MAAM,MAAM,YAAY,GAAG,CAAC,CAAC,KAAK,CAAC,OAAO,kBAAkB,CAAC,CAAC"}

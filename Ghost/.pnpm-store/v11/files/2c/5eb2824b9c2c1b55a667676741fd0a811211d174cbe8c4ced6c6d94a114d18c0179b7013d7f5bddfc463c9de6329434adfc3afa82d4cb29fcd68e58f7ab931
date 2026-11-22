@@ -1,0 +1,28 @@
+/**
+ * What a port supplies, and what to call a field made to hold it. The type is a rule about
+ * any destination: a port that returns an address can only be collected into a field that
+ * keeps one, and a phone number into a phone field, which keeps every number in one form. The
+ * name is used only when the request names a key the site does not keep yet, which is the one
+ * moment a publisher has not chosen a label themselves.
+ *
+ * A key is not a port. `checkout.phone` is what a checkout collects; where it lands is whatever
+ * the request said, and `Shipping Phone` is only how that field is listed.
+ */
+export declare const PORT_FIELD: {
+    readonly "checkout.shipping.name": {
+        readonly key: 'shipping_name';
+        readonly name: 'Shipping Name';
+        readonly type: 'short_text';
+    };
+    readonly "checkout.shipping.address": {
+        readonly key: 'shipping_address';
+        readonly name: 'Shipping Address';
+        readonly type: 'address';
+    };
+    readonly "checkout.phone": {
+        readonly key: 'shipping_phone';
+        readonly name: 'Shipping Phone';
+        readonly type: 'phone';
+    };
+};
+//# sourceMappingURL=destinations.d.ts.map

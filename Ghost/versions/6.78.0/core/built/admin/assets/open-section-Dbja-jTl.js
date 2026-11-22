@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`15730686-5a2f-4b7e-a7fb-54c0a2fcf318`,e._sentryDebugIdIdentifier=`sentry-dbid-15730686-5a2f-4b7e-a7fb-54c0a2fcf318`)}catch{}})();var e=`open`,t=t=>`/settings/${t}?${e}`,n=t=>new URLSearchParams(t).has(e);export{t as n,n as t};
+//# debugId=15730686-5a2f-4b7e-a7fb-54c0a2fcf318

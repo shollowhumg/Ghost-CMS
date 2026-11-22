@@ -1,0 +1,3571 @@
+"use strict";
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// src/auth-capture/facilitator/index.ts
+var facilitator_exports = {};
+__export(facilitator_exports, {
+  AuthCaptureCallerIdentityConflictError: () => AuthCaptureCallerIdentityConflictError,
+  AuthCaptureEvmScheme: () => AuthCaptureEvmScheme,
+  InMemoryAuthCaptureDelegatedAuthStorage: () => InMemoryAuthCaptureDelegatedAuthStorage,
+  facilitatorAddresses: () => facilitatorAddresses,
+  selectSubmitter: () => selectSubmitter
+});
+module.exports = __toCommonJS(facilitator_exports);
+
+// src/auth-capture/facilitator/scheme.ts
+var import_facilitator = require("@x402/core/facilitator");
+var import_viem15 = require("viem");
+
+// src/shared/extensions/gasSponsoring.ts
+var import_viem5 = require("viem");
+
+// src/constants.ts
+var EVM_NETWORK_CHAIN_ID_MAP = {
+  ethereum: 1,
+  sepolia: 11155111,
+  abstract: 2741,
+  "abstract-testnet": 11124,
+  "base-sepolia": 84532,
+  base: 8453,
+  "avalanche-fuji": 43113,
+  avalanche: 43114,
+  iotex: 4689,
+  sei: 1329,
+  "sei-testnet": 1328,
+  polygon: 137,
+  "polygon-amoy": 80002,
+  peaq: 3338,
+  story: 1514,
+  educhain: 41923,
+  "skale-base-sepolia": 324705682,
+  megaeth: 4326,
+  monad: 143,
+  "monad-testnet": 10143,
+  stable: 988,
+  "stable-testnet": 2201,
+  celo: 42220,
+  flare: 14
+};
+var NETWORKS = Object.keys(EVM_NETWORK_CHAIN_ID_MAP);
+var PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+
+// src/utils.ts
+var import_viem = require("viem");
+var EIP155_NETWORK_REGEX = /^eip155:(\d+)$/;
+function getEvmChainId(network) {
+  if (!network.startsWith("eip155:")) {
+    throw new Error(`Unsupported network format: ${network} (expected eip155:CHAIN_ID)`);
+  }
+  const match = EIP155_NETWORK_REGEX.exec(network);
+  if (!match) {
+    throw new Error(`Invalid CAIP-2 chain ID: ${network}`);
+  }
+  const chainId = Number(match[1]);
+  if (!Number.isSafeInteger(chainId)) {
+    throw new Error(`Invalid CAIP-2 chain ID: ${network}`);
+  }
+  return chainId;
+}
+var MAX_ERROR_MESSAGE_LENGTH = 500;
+function truncateErrorMessage(message) {
+  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
+}
+function isValidTxHash(hash) {
+  return (0, import_viem.isHash)(hash) && !/^0x0+$/.test(hash);
+}
+function invalidBroadcastHashResponse(tx, errorReason, network, payer) {
+  return {
+    success: false,
+    errorReason,
+    errorMessage: `signer returned an invalid transaction hash: ${typeof tx === "string" ? tx : JSON.stringify(tx)}`,
+    transaction: "",
+    network,
+    payer
+  };
+}
+
+// src/exact/client/eip2612.ts
+var import_viem2 = require("viem");
+
+// src/exact/client/erc20approval.ts
+var import_viem3 = require("viem");
+
+// src/shared/rpc.ts
+var import_viem4 = require("viem");
+
+// src/shared/extensions/builderCode.ts
+var BUILDER_CODE_KEY = "builder-code";
+var BUILDER_CODE_RESOLVER = async (context, ctx) => {
+  const ext = context.getExtension(BUILDER_CODE_KEY);
+  if (!ext?.buildDataSuffix) {
+    return void 0;
+  }
+  return ext.buildDataSuffix(ctx);
+};
+var DATA_SUFFIX_RESOLVERS = [BUILDER_CODE_RESOLVER];
+async function resolveDataSuffix(context, ctx) {
+  if (!context) {
+    return void 0;
+  }
+  const parts = [];
+  for (const resolver of DATA_SUFFIX_RESOLVERS) {
+    const suffix = await resolver(context, ctx);
+    if (suffix && suffix !== "0x" && suffix.length > 2) {
+      parts.push(suffix);
+    }
+  }
+  if (parts.length === 0) {
+    return void 0;
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  return parts.reduce((acc, part, index) => {
+    if (index === 0) {
+      return part;
+    }
+    const stripped = part.startsWith("0x") ? part.slice(2) : part;
+    return `${acc}${stripped}`;
+  });
+}
+function appendDataSuffix(calldata, suffix) {
+  if (!suffix || suffix === "0x" || suffix.length <= 2) {
+    return calldata;
+  }
+  const suffixHex = suffix.startsWith("0x") ? suffix.slice(2) : suffix;
+  return `${calldata}${suffixHex}`;
+}
+
+// src/auth-capture/constants.ts
+var import_viem6 = require("viem");
+var AUTH_CAPTURE_SCHEME = "auth-capture";
+var AUTH_CAPTURE_ESCROW_V1_0_ADDRESS = "0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff";
+var EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS = "0x0E3dF9510de65469C4518D7843919c0b8C7A7757";
+var PERMIT2_TOKEN_COLLECTOR_V1_0_ADDRESS = "0x992476B9Ee81d52a5BdA0622C333938D0Af0aB26";
+var OPERATOR_REFUND_COLLECTOR_V1_0_ADDRESS = "0x934907bffd0901b6A21e398B9C53A4A38F02fa5d";
+var AUTH_CAPTURE_ESCROW_V1_1_ADDRESS = "0xf96815976523E00e65Be8f34cA5e64b4f41EB19c";
+var EIP3009_TOKEN_COLLECTOR_V1_1_ADDRESS = "0x8612dfdc421f80336cd14E8EF9cb1E765dB5ab88";
+var PERMIT2_TOKEN_COLLECTOR_V1_1_ADDRESS = "0xD69831Aed5bfe262067ec4c751f4F830EcdD446e";
+var OPERATOR_REFUND_COLLECTOR_V1_1_ADDRESS = "0x7a03443724d14798c4AB4622F1DAAcA761Fea486";
+var AUTH_CAPTURE_ESCROW_ADDRESS = AUTH_CAPTURE_ESCROW_V1_1_ADDRESS;
+var AUTH_CAPTURE_DEPLOYMENT_V1_0 = {
+  version: "v1.0",
+  escrow: AUTH_CAPTURE_ESCROW_V1_0_ADDRESS,
+  eip3009Collector: EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  permit2Collector: PERMIT2_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  operatorRefundCollector: OPERATOR_REFUND_COLLECTOR_V1_0_ADDRESS
+};
+var AUTH_CAPTURE_DEPLOYMENT_V1_1 = {
+  version: "v1.1",
+  escrow: AUTH_CAPTURE_ESCROW_V1_1_ADDRESS,
+  eip3009Collector: EIP3009_TOKEN_COLLECTOR_V1_1_ADDRESS,
+  permit2Collector: PERMIT2_TOKEN_COLLECTOR_V1_1_ADDRESS,
+  operatorRefundCollector: OPERATOR_REFUND_COLLECTOR_V1_1_ADDRESS
+};
+function resolveAuthCaptureDeployment(escrow) {
+  if (escrow === void 0 || escrow === "") {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_1;
+  }
+  if (!(0, import_viem6.isAddress)(escrow)) {
+    return void 0;
+  }
+  const normalized = (0, import_viem6.getAddress)(escrow);
+  if ((0, import_viem6.isAddressEqual)(normalized, AUTH_CAPTURE_ESCROW_V1_1_ADDRESS) || (0, import_viem6.isAddressEqual)(normalized, AUTH_CAPTURE_ESCROW_ADDRESS)) {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_1;
+  }
+  if ((0, import_viem6.isAddressEqual)(normalized, AUTH_CAPTURE_ESCROW_V1_0_ADDRESS)) {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_0;
+  }
+  return void 0;
+}
+var DEFAULT_CUSTOM_OPERATOR_AUTHORIZE_GAS_LIMIT = 1000000n;
+var SALT_BINDING_TYPEHASH = (0, import_viem6.keccak256)(
+  (0, import_viem6.toBytes)(
+    "x402AuthCaptureSaltBinding(address receiverAuthorizer,address policy,uint256 saltNonce)"
+  )
+);
+var OPERATOR_EIP712_DOMAIN = {
+  name: "x402 Auth Capture Operator",
+  version: "1"
+};
+var RECEIVE_AUTHORIZATION_TYPES = {
+  ReceiveWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" }
+  ]
+};
+var PERMIT2_TRANSFER_FROM_TYPES = {
+  PermitTransferFrom: [
+    { name: "permitted", type: "TokenPermissions" },
+    { name: "spender", type: "address" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" }
+  ],
+  TokenPermissions: [
+    { name: "token", type: "address" },
+    { name: "amount", type: "uint256" }
+  ]
+};
+var CHARGE_TYPES_V1_0 = {
+  Charge: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorDataHash", type: "bytes32" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" }
+  ]
+};
+var CAPTURE_TYPES_V1_0 = {
+  Capture: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+var CHARGE_TYPES_V1_1 = {
+  Charge: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorDataHash", type: "bytes32" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" }
+  ]
+};
+var CAPTURE_TYPES_V1_1 = {
+  Capture: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+var VOID_TYPES = {
+  Void: [{ name: "paymentInfoHash", type: "bytes32" }]
+};
+var REFUND_TYPES = {
+  Refund: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+function chargeTypesForDeployment(deployment) {
+  return deployment.version === "v1.0" ? CHARGE_TYPES_V1_0 : CHARGE_TYPES_V1_1;
+}
+function captureTypesForDeployment(deployment) {
+  return deployment.version === "v1.0" ? CAPTURE_TYPES_V1_0 : CAPTURE_TYPES_V1_1;
+}
+function feeAmountFromBps(amount, feeBps) {
+  return amount * BigInt(feeBps) / 10000n;
+}
+
+// src/auth-capture/types.ts
+function isAuthCaptureExtra(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value;
+  return typeof v.captureAuthorizer === "string" && typeof v.captureDeadline === "number" && typeof v.refundDeadline === "number" && typeof v.feeRecipient === "string" && typeof v.minFeeBps === "number" && typeof v.maxFeeBps === "number" && typeof v.name === "string" && typeof v.version === "string";
+}
+function isLifecyclePayload(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const type = value.type;
+  return type === "capture" || type === "void" || type === "refund";
+}
+function isCapturePayload(value) {
+  if (!isLifecyclePayload(value) || value.type !== "capture") return false;
+  const v = value;
+  const hasFeeBps = typeof v.feeBps === "number";
+  const hasFeeAmount = typeof v.feeAmount === "string";
+  if (hasFeeBps === hasFeeAmount) return false;
+  return isPaymentInfoStruct(v.paymentInfo) && typeof v.saltNonce === "string" && typeof v.amount === "string" && typeof v.feeReceiver === "string" && typeof v.expectedCapturableAmount === "string" && typeof v.expectedRefundableAmount === "string" && (v.authorizerSignature === void 0 || typeof v.authorizerSignature === "string") && (v.voidAuthorizerSignature === void 0 || typeof v.voidAuthorizerSignature === "string") && isDelegatedCaptureShape(v);
+}
+function isDelegatedCaptureShape(v) {
+  if (v.voidRemainder !== void 0) {
+    return v.voidRemainder === true && v.authorizerSignature === void 0 && v.voidAuthorizerSignature === void 0;
+  }
+  return v.authorizerSignature !== void 0 || v.voidAuthorizerSignature === void 0;
+}
+function isVoidPayload(value) {
+  if (!isLifecyclePayload(value) || value.type !== "void") return false;
+  const v = value;
+  return isPaymentInfoStruct(v.paymentInfo) && typeof v.saltNonce === "string" && (v.authorizerSignature === void 0 || typeof v.authorizerSignature === "string") && v.voidAuthorizerSignature === void 0 && v.voidRemainder === void 0;
+}
+function isRefundPayload(value) {
+  if (!isLifecyclePayload(value) || value.type !== "refund") return false;
+  const v = value;
+  return isPaymentInfoStruct(v.paymentInfo) && typeof v.saltNonce === "string" && typeof v.amount === "string" && typeof v.expectedCapturableAmount === "string" && typeof v.expectedRefundableAmount === "string" && (v.authorizerSignature === void 0 || typeof v.authorizerSignature === "string") && v.voidAuthorizerSignature === void 0 && v.voidRemainder === void 0;
+}
+function isPaymentInfoStruct(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value;
+  return typeof v.operator === "string" && typeof v.payer === "string" && typeof v.receiver === "string" && typeof v.token === "string" && typeof v.maxAmount === "string" && typeof v.preApprovalExpiry === "number" && typeof v.authorizationExpiry === "number" && typeof v.refundExpiry === "number" && typeof v.minFeeBps === "number" && typeof v.maxFeeBps === "number" && typeof v.feeReceiver === "string" && typeof v.salt === "string";
+}
+function isHexString(value) {
+  return typeof value === "string" && value.startsWith("0x");
+}
+function isOptionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function readChargeCompletion(v) {
+  const hasAny = "amount" in v || "feeBps" in v || "feeAmount" in v || "feeReceiver" in v || "authorizerSignature" in v;
+  if (!hasAny) return void 0;
+  if (typeof v.amount === "string" && typeof v.feeBps === "number" && v.feeAmount === void 0 && typeof v.feeReceiver === "string" && isOptionalString(v.authorizerSignature)) {
+    return {
+      amount: v.amount,
+      feeBps: v.feeBps,
+      feeReceiver: v.feeReceiver,
+      authorizerSignature: v.authorizerSignature
+    };
+  }
+  if (typeof v.amount === "string" && typeof v.feeAmount === "string" && v.feeBps === void 0 && typeof v.feeReceiver === "string" && isOptionalString(v.authorizerSignature)) {
+    return {
+      amount: v.amount,
+      feeAmount: v.feeAmount,
+      feeReceiver: v.feeReceiver,
+      authorizerSignature: v.authorizerSignature
+    };
+  }
+  return void 0;
+}
+function collectExtras(v) {
+  if (!isHexString(v.salt)) return void 0;
+  if (v.saltNonce === void 0) {
+    return { salt: v.salt };
+  }
+  if (!isHexString(v.saltNonce)) return void 0;
+  return { salt: v.salt, saltNonce: v.saltNonce };
+}
+function isEip3009Payload(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value;
+  if (v.type !== void 0) return false;
+  if (typeof v.authorization !== "object" || v.authorization === null || typeof v.signature !== "string") {
+    return false;
+  }
+  const saltFields = collectExtras(v);
+  if (!saltFields) return false;
+  const hasAnyCharge = "amount" in v || "feeBps" in v || "feeAmount" in v || "feeReceiver" in v || "authorizerSignature" in v;
+  if (hasAnyCharge) {
+    if (!saltFields.saltNonce) return false;
+    return readChargeCompletion(v) !== void 0;
+  }
+  return true;
+}
+function isPermit2Payload(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value;
+  if (v.type !== void 0) return false;
+  if (typeof v.signature !== "string") return false;
+  if (typeof v.permit2Authorization !== "object" || v.permit2Authorization === null) return false;
+  const a = v.permit2Authorization;
+  if (typeof a.from !== "string" || typeof a.spender !== "string" || typeof a.nonce !== "string" || typeof a.deadline !== "string" || typeof a.permitted !== "object" || a.permitted === null) {
+    return false;
+  }
+  const saltFields = collectExtras(v);
+  if (!saltFields) return false;
+  const hasAnyCharge = "amount" in v || "feeBps" in v || "feeAmount" in v || "feeReceiver" in v || "authorizerSignature" in v;
+  if (hasAnyCharge) {
+    if (!saltFields.saltNonce) return false;
+    return readChargeCompletion(v) !== void 0;
+  }
+  return true;
+}
+function isAuthCaptureCollectPayload(value) {
+  return isEip3009Payload(value) || isPermit2Payload(value);
+}
+
+// src/auth-capture/errors.ts
+var ErrInvalidPayloadFormat = "invalid_auth_capture_evm_payload_format";
+var ErrInvalidPayloadType = "invalid_auth_capture_evm_payload_type";
+var ErrVoidAuthorizerSignature = "invalid_auth_capture_evm_void_authorizer_signature";
+var ErrVoidRemainderFullCapture = "invalid_auth_capture_evm_void_remainder_full_capture";
+var ErrUnsupportedPaymentFlow = "invalid_auth_capture_evm_unsupported_payment_flow";
+var ErrUnsupportedScheme = "invalid_auth_capture_evm_scheme";
+var ErrNetworkMismatch = "invalid_auth_capture_evm_network_mismatch";
+var ErrInvalidNetwork = "invalid_network";
+var ErrInvalidAuthCaptureExtra = "invalid_auth_capture_evm_extra";
+var ErrMissingReceiverAuthorizer = "invalid_auth_capture_evm_missing_receiver_authorizer";
+var ErrUnsupportedOperatorType = "invalid_auth_capture_evm_unsupported_operator_type";
+var ErrInvalidPolicy = "invalid_auth_capture_evm_policy";
+var ErrLifecycleNotRelayed = "invalid_auth_capture_evm_lifecycle_not_relayed";
+var ErrOperatorNotAdmitted = "invalid_auth_capture_evm_operator_not_admitted";
+var ErrOperatorMismatch = "invalid_auth_capture_evm_operator_mismatch";
+var ErrSaltBindingMismatch = "invalid_auth_capture_evm_salt_binding_mismatch";
+var ErrAuthorizerSignature = "invalid_auth_capture_evm_authorizer_signature";
+var ErrUnauthenticatedAuthorizerRequest = "invalid_auth_capture_evm_unauthenticated_authorizer_request";
+var ErrDelegatedAuthUnavailable = "invalid_auth_capture_evm_delegated_auth_unavailable";
+var ErrUnexpectedPaymentState = "invalid_auth_capture_evm_unexpected_payment_state";
+var ErrRefundFundingUnavailable = "invalid_auth_capture_evm_refund_funding_unavailable";
+var ErrUnsupportedAssetTransferMethod = "invalid_auth_capture_evm_unsupported_asset_transfer_method";
+var ErrPayloadMethodMismatch = "invalid_auth_capture_evm_payload_method_mismatch";
+var ErrCaptureDeadlineExpired = "invalid_auth_capture_evm_capture_deadline_expired";
+var ErrRefundDeadlineExpired = "invalid_auth_capture_evm_refund_deadline_expired";
+var ErrInvalidDeadlineOrdering = "invalid_auth_capture_evm_deadline_ordering";
+var ErrAuthorizationExpired = "invalid_auth_capture_evm_authorization_expired";
+var ErrAuthorizationNotYetValid = "invalid_auth_capture_evm_authorization_not_yet_valid";
+var ErrTokenCollectorMismatch = "invalid_auth_capture_evm_token_collector_mismatch";
+var ErrTokenMismatch = "invalid_auth_capture_evm_token_mismatch";
+var ErrInvalidAuthCaptureSignature = "invalid_auth_capture_evm_signature";
+var ErrErc6492FactoryNotAllowed = "invalid_auth_capture_evm_erc6492_factory_not_allowed";
+var ErrAmountMismatch = "invalid_auth_capture_evm_amount_mismatch";
+var ErrNonceMismatch = "invalid_auth_capture_evm_nonce_mismatch";
+var ErrInsufficientBalance = "invalid_auth_capture_evm_insufficient_balance";
+var ErrSimulationFailed = "invalid_auth_capture_evm_simulation_failed";
+var ErrPaymentInfoMismatch = "invalid_auth_capture_evm_payment_info_mismatch";
+var ErrUndeployedSmartWallet = "invalid_auth_capture_evm_payload_undeployed_smart_wallet";
+var ErrPaymentAlreadyCollected = "invalid_auth_capture_evm_payment_already_collected";
+var ErrTokenCollectionFailed = "invalid_auth_capture_evm_token_collection_failed";
+var ErrInvalidCollector = "invalid_auth_capture_evm_collector";
+var ErrAmountOverflow = "invalid_auth_capture_evm_amount_overflow";
+var ErrInvalidFeeBps = "invalid_auth_capture_evm_fee_bps";
+var ErrInvalidFeeBpsRange = "invalid_auth_capture_evm_fee_bps_range";
+var ErrFeeBpsOutOfRange = "invalid_auth_capture_evm_fee_bps_out_of_range";
+var ErrZeroFeeReceiver = "invalid_auth_capture_evm_zero_fee_receiver";
+var ErrInvalidFeeReceiver = "invalid_auth_capture_evm_fee_receiver";
+var ErrInsufficientAuthorization = "invalid_auth_capture_evm_insufficient_authorization";
+var ErrZeroAuthorization = "invalid_auth_capture_evm_zero_authorization";
+var ErrRefundExceedsCapture = "invalid_auth_capture_evm_refund_exceeds_capture";
+var ErrVerificationFailed = "invalid_auth_capture_evm_verification_failed";
+var ErrTransactionReverted = "invalid_auth_capture_evm_transaction_reverted";
+var ErrSettlementPending = "settlement_pending";
+var ESCROW_ERROR_TO_INVALID_REASON = {
+  AfterPreApprovalExpiry: ErrAuthorizationExpired,
+  InvalidExpiries: ErrInvalidDeadlineOrdering,
+  ExceedsMaxAmount: ErrAmountMismatch,
+  PaymentAlreadyCollected: ErrPaymentAlreadyCollected,
+  TokenCollectionFailed: ErrTokenCollectionFailed,
+  InvalidCollectorForOperation: ErrInvalidCollector,
+  InvalidSender: ErrOperatorMismatch,
+  ZeroAmount: ErrAmountMismatch,
+  AmountOverflow: ErrAmountOverflow,
+  FeeBpsOverflow: ErrInvalidFeeBps,
+  InvalidFeeBpsRange: ErrInvalidFeeBpsRange,
+  FeeBpsOutOfRange: ErrFeeBpsOutOfRange,
+  FeeAmountOutOfRange: ErrFeeBpsOutOfRange,
+  ZeroFeeReceiver: ErrZeroFeeReceiver,
+  InvalidFeeReceiver: ErrInvalidFeeReceiver,
+  AfterAuthorizationExpiry: ErrCaptureDeadlineExpired,
+  InsufficientAuthorization: ErrInsufficientAuthorization,
+  ZeroAuthorization: ErrZeroAuthorization,
+  AfterRefundExpiry: ErrRefundDeadlineExpired,
+  RefundExceedsCapture: ErrRefundExceedsCapture
+};
+
+// src/auth-capture/facilitator/utils.ts
+var import_viem9 = require("viem");
+
+// src/auth-capture/abi.ts
+var PAYMENT_INFO_COMPONENTS = [
+  { name: "operator", type: "address" },
+  { name: "payer", type: "address" },
+  { name: "receiver", type: "address" },
+  { name: "token", type: "address" },
+  { name: "maxAmount", type: "uint120" },
+  { name: "preApprovalExpiry", type: "uint48" },
+  { name: "authorizationExpiry", type: "uint48" },
+  { name: "refundExpiry", type: "uint48" },
+  { name: "minFeeBps", type: "uint16" },
+  { name: "maxFeeBps", type: "uint16" },
+  { name: "feeReceiver", type: "address" },
+  { name: "salt", type: "uint256" }
+];
+var ESCROW_SHARED_ABI = [
+  {
+    name: "authorize",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      },
+      { name: "amount", type: "uint256" },
+      { name: "tokenCollector", type: "address" },
+      { name: "collectorData", type: "bytes" }
+    ],
+    outputs: []
+  },
+  {
+    name: "void",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      }
+    ],
+    outputs: []
+  },
+  {
+    name: "refund",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      },
+      { name: "amount", type: "uint256" },
+      { name: "tokenCollector", type: "address" },
+      { name: "collectorData", type: "bytes" }
+    ],
+    outputs: []
+  }
+];
+var CHARGE_V1_0_ABI = {
+  name: "charge",
+  type: "function",
+  stateMutability: "nonpayable",
+  inputs: [
+    {
+      name: "paymentInfo",
+      type: "tuple",
+      components: PAYMENT_INFO_COMPONENTS
+    },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorData", type: "bytes" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" }
+  ],
+  outputs: []
+};
+var CAPTURE_V1_0_ABI = {
+  name: "capture",
+  type: "function",
+  stateMutability: "nonpayable",
+  inputs: [
+    {
+      name: "paymentInfo",
+      type: "tuple",
+      components: PAYMENT_INFO_COMPONENTS
+    },
+    { name: "amount", type: "uint256" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" }
+  ],
+  outputs: []
+};
+var CHARGE_V1_1_ABI = {
+  name: "charge",
+  type: "function",
+  stateMutability: "nonpayable",
+  inputs: [
+    {
+      name: "paymentInfo",
+      type: "tuple",
+      components: PAYMENT_INFO_COMPONENTS
+    },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorData", type: "bytes" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" }
+  ],
+  outputs: []
+};
+var CAPTURE_V1_1_ABI = {
+  name: "capture",
+  type: "function",
+  stateMutability: "nonpayable",
+  inputs: [
+    {
+      name: "paymentInfo",
+      type: "tuple",
+      components: PAYMENT_INFO_COMPONENTS
+    },
+    { name: "amount", type: "uint256" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" }
+  ],
+  outputs: []
+};
+var ESCROW_ABI_V1_0 = [
+  ...ESCROW_SHARED_ABI.slice(0, 1),
+  CHARGE_V1_0_ABI,
+  CAPTURE_V1_0_ABI,
+  ...ESCROW_SHARED_ABI.slice(1)
+];
+var ESCROW_ABI_V1_1 = [
+  ...ESCROW_SHARED_ABI.slice(0, 1),
+  CHARGE_V1_1_ABI,
+  CAPTURE_V1_1_ABI,
+  ...ESCROW_SHARED_ABI.slice(1)
+];
+var ERC20_BALANCE_OF_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "balance", type: "uint256" }]
+  }
+];
+var PAYMENT_AUTHORIZED_EVENT = {
+  type: "event",
+  name: "PaymentAuthorized",
+  inputs: [
+    { name: "paymentInfoHash", type: "bytes32", indexed: true },
+    {
+      name: "paymentInfo",
+      type: "tuple",
+      components: PAYMENT_INFO_COMPONENTS
+    },
+    { name: "amount", type: "uint256", indexed: false },
+    { name: "tokenCollector", type: "address", indexed: false }
+  ]
+};
+var ESCROW_EVENTS_ABI_V1_0 = [
+  PAYMENT_AUTHORIZED_EVENT,
+  {
+    type: "event",
+    name: "PaymentCharged",
+    inputs: [
+      { name: "paymentInfoHash", type: "bytes32", indexed: true },
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "tokenCollector", type: "address", indexed: false },
+      { name: "feeBps", type: "uint16", indexed: false },
+      { name: "feeReceiver", type: "address", indexed: false }
+    ]
+  }
+];
+var ESCROW_EVENTS_ABI_V1_1 = [
+  PAYMENT_AUTHORIZED_EVENT,
+  {
+    type: "event",
+    name: "PaymentCharged",
+    inputs: [
+      { name: "paymentInfoHash", type: "bytes32", indexed: true },
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "tokenCollector", type: "address", indexed: false },
+      { name: "feeAmount", type: "uint256", indexed: false },
+      { name: "feeReceiver", type: "address", indexed: false }
+    ]
+  }
+];
+function escrowEventsAbiForDeployment(deployment) {
+  return deployment.version === "v1.0" ? ESCROW_EVENTS_ABI_V1_0 : ESCROW_EVENTS_ABI_V1_1;
+}
+var ESCROW_VIEW_ABI = [
+  {
+    name: "getTokenStore",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "operator", type: "address" }],
+    outputs: [{ type: "address" }]
+  },
+  {
+    name: "getHash",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "paymentInfo",
+        type: "tuple",
+        components: PAYMENT_INFO_COMPONENTS
+      }
+    ],
+    outputs: [{ type: "bytes32" }]
+  },
+  {
+    name: "paymentState",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "paymentInfoHash", type: "bytes32" }],
+    outputs: [
+      {
+        name: "state",
+        type: "tuple",
+        components: [
+          { name: "hasCollectedPayment", type: "bool" },
+          { name: "capturableAmount", type: "uint120" },
+          { name: "refundableAmount", type: "uint120" }
+        ]
+      }
+    ]
+  }
+];
+var ESCROW_ERRORS_ABI = [
+  { type: "error", name: "InvalidSender", inputs: [{ type: "address" }, { type: "address" }] },
+  { type: "error", name: "ZeroAmount", inputs: [] },
+  { type: "error", name: "AmountOverflow", inputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "error", name: "ExceedsMaxAmount", inputs: [{ type: "uint256" }, { type: "uint256" }] },
+  {
+    type: "error",
+    name: "AfterPreApprovalExpiry",
+    inputs: [{ type: "uint48" }, { type: "uint48" }]
+  },
+  {
+    type: "error",
+    name: "InvalidExpiries",
+    inputs: [{ type: "uint48" }, { type: "uint48" }, { type: "uint48" }]
+  },
+  { type: "error", name: "FeeBpsOverflow", inputs: [{ type: "uint16" }] },
+  { type: "error", name: "InvalidFeeBpsRange", inputs: [{ type: "uint16" }, { type: "uint16" }] },
+  {
+    type: "error",
+    name: "FeeBpsOutOfRange",
+    inputs: [{ type: "uint16" }, { type: "uint16" }, { type: "uint16" }]
+  },
+  {
+    type: "error",
+    name: "FeeAmountOutOfRange",
+    inputs: [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }]
+  },
+  { type: "error", name: "ZeroFeeReceiver", inputs: [] },
+  { type: "error", name: "InvalidFeeReceiver", inputs: [{ type: "address" }, { type: "address" }] },
+  { type: "error", name: "InvalidCollectorForOperation", inputs: [] },
+  { type: "error", name: "TokenCollectionFailed", inputs: [] },
+  { type: "error", name: "PaymentAlreadyCollected", inputs: [{ type: "bytes32" }] },
+  {
+    type: "error",
+    name: "AfterAuthorizationExpiry",
+    inputs: [{ type: "uint48" }, { type: "uint48" }]
+  },
+  {
+    type: "error",
+    name: "InsufficientAuthorization",
+    inputs: [{ type: "bytes32" }, { type: "uint256" }, { type: "uint256" }]
+  },
+  { type: "error", name: "ZeroAuthorization", inputs: [{ type: "bytes32" }] },
+  {
+    type: "error",
+    name: "AfterRefundExpiry",
+    inputs: [{ type: "uint48" }, { type: "uint48" }]
+  },
+  {
+    type: "error",
+    name: "RefundExceedsCapture",
+    inputs: [{ type: "uint256" }, { type: "uint256" }]
+  }
+];
+var ESCROW_ABI_WITH_ERRORS_V1_0 = [...ESCROW_ABI_V1_0, ...ESCROW_ERRORS_ABI];
+var ESCROW_ABI_WITH_ERRORS_V1_1 = [...ESCROW_ABI_V1_1, ...ESCROW_ERRORS_ABI];
+function escrowAbiWithErrorsForDeployment(deployment) {
+  return deployment.version === "v1.0" ? ESCROW_ABI_WITH_ERRORS_V1_0 : ESCROW_ABI_WITH_ERRORS_V1_1;
+}
+
+// src/auth-capture/nonce.ts
+var import_viem8 = require("viem");
+
+// src/shared/verifySignature.ts
+var import_viem7 = require("viem");
+var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+async function classifyErc6492Payer(signer, signature, payerAddress) {
+  const erc6492Data = (0, import_viem7.parseErc6492Signature)(signature);
+  const hasDeploymentInfo = !!(erc6492Data.address && erc6492Data.data && erc6492Data.data !== "0x" && !(0, import_viem7.isAddressEqual)(erc6492Data.address, ZERO_ADDRESS));
+  const innerSignature = hasDeploymentInfo ? erc6492Data.signature : signature;
+  const eip6492Deployment = hasDeploymentInfo ? { factoryAddress: erc6492Data.address, factoryCalldata: erc6492Data.data } : void 0;
+  let code;
+  let codeLookupError;
+  try {
+    code = await signer.getCode({ address: payerAddress });
+  } catch (error) {
+    codeLookupError = error;
+    code = void 0;
+  }
+  const isDeployedAtPayer = !!(code && code !== "0x");
+  const isCounterfactual = hasDeploymentInfo && !isDeployedAtPayer && codeLookupError === void 0;
+  return {
+    isCounterfactual,
+    isDeployedAtPayer,
+    hasDeploymentInfo,
+    innerSignature,
+    eip6492Deployment,
+    payerCode: code,
+    codeLookupError
+  };
+}
+var ERC1271_MAGIC_VALUE = "0x1626ba7e";
+var ERC1271_ABI = [
+  {
+    name: "isValidSignature",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "hash", type: "bytes32" },
+      { name: "signature", type: "bytes" }
+    ],
+    outputs: [{ name: "", type: "bytes4" }]
+  }
+];
+async function verifyTypedDataSignature(signer, params) {
+  let digest;
+  try {
+    digest = (0, import_viem7.hashTypedData)({
+      domain: params.domain,
+      types: params.types,
+      primaryType: params.primaryType,
+      message: params.message
+    });
+  } catch {
+    return false;
+  }
+  return verifyHashSignature(signer, params.address, digest, params.signature);
+}
+async function verifyHashSignature(signer, address, digest, signature) {
+  let code;
+  try {
+    code = await signer.getCode({ address });
+  } catch {
+    return false;
+  }
+  return verifyHashSignatureWithCode(signer, address, code, digest, signature);
+}
+function verifyHashSignatureWithCode(signer, address, code, digest, signature) {
+  if (!code || code === "0x") {
+    return verifyECDSA(address, digest, signature);
+  }
+  return verifyERC1271(signer, address, digest, signature);
+}
+async function verifyECDSA(address, digest, signature) {
+  const sigHex = signature.startsWith("0x") ? signature.slice(2) : signature;
+  if (sigHex.length !== 130) return false;
+  try {
+    const recovered = await (0, import_viem7.recoverAddress)({ hash: digest, signature });
+    return (0, import_viem7.isAddressEqual)((0, import_viem7.getAddress)(recovered), (0, import_viem7.getAddress)(address));
+  } catch {
+    return false;
+  }
+}
+async function verifyERC1271(signer, address, digest, signature) {
+  try {
+    const result = await signer.readContract({
+      address,
+      abi: ERC1271_ABI,
+      functionName: "isValidSignature",
+      args: [digest, signature]
+    });
+    if (typeof result !== "string") return false;
+    return result.toLowerCase().startsWith(ERC1271_MAGIC_VALUE);
+  } catch {
+    return false;
+  }
+}
+
+// src/auth-capture/nonce.ts
+var PAYMENT_INFO_TYPEHASH = (0, import_viem8.keccak256)(
+  new TextEncoder().encode(
+    "PaymentInfo(address operator,address payer,address receiver,address token,uint120 maxAmount,uint48 preApprovalExpiry,uint48 authorizationExpiry,uint48 refundExpiry,uint16 minFeeBps,uint16 maxFeeBps,address feeReceiver,uint256 salt)"
+  )
+);
+function hashPaymentInfo(chainId, paymentInfo, payer, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  const paymentInfoEncoded = (0, import_viem8.encodeAbiParameters)(
+    [
+      { name: "typehash", type: "bytes32" },
+      { name: "operator", type: "address" },
+      { name: "payer", type: "address" },
+      { name: "receiver", type: "address" },
+      { name: "token", type: "address" },
+      { name: "maxAmount", type: "uint120" },
+      { name: "preApprovalExpiry", type: "uint48" },
+      { name: "authorizationExpiry", type: "uint48" },
+      { name: "refundExpiry", type: "uint48" },
+      { name: "minFeeBps", type: "uint16" },
+      { name: "maxFeeBps", type: "uint16" },
+      { name: "feeReceiver", type: "address" },
+      { name: "salt", type: "uint256" }
+    ],
+    [
+      PAYMENT_INFO_TYPEHASH,
+      paymentInfo.operator,
+      payer,
+      paymentInfo.receiver,
+      paymentInfo.token,
+      BigInt(paymentInfo.maxAmount),
+      paymentInfo.preApprovalExpiry,
+      paymentInfo.authorizationExpiry,
+      paymentInfo.refundExpiry,
+      paymentInfo.minFeeBps,
+      paymentInfo.maxFeeBps,
+      paymentInfo.feeReceiver,
+      BigInt(paymentInfo.salt)
+    ]
+  );
+  const paymentInfoHash = (0, import_viem8.keccak256)(paymentInfoEncoded);
+  const outerEncoded = (0, import_viem8.encodeAbiParameters)(
+    [
+      { name: "chainId", type: "uint256" },
+      { name: "escrow", type: "address" },
+      { name: "paymentInfoHash", type: "bytes32" }
+    ],
+    [BigInt(chainId), escrowAddress, paymentInfoHash]
+  );
+  return (0, import_viem8.keccak256)(outerEncoded);
+}
+function computePayerAgnosticPaymentInfoHash(chainId, paymentInfo, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  return hashPaymentInfo(chainId, paymentInfo, import_viem8.zeroAddress, escrowAddress);
+}
+function computePaymentInfoHash(chainId, paymentInfo, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  return hashPaymentInfo(chainId, paymentInfo, paymentInfo.payer, escrowAddress);
+}
+async function verifyERC3009Signature(signer, authorization, signature, extra, tokenAddress) {
+  return verifyTypedDataSignature(signer, {
+    address: (0, import_viem8.getAddress)(authorization.from),
+    domain: {
+      name: extra.name,
+      version: extra.version,
+      chainId: extra.chainId,
+      verifyingContract: (0, import_viem8.getAddress)(tokenAddress)
+    },
+    types: RECEIVE_AUTHORIZATION_TYPES,
+    primaryType: "ReceiveWithAuthorization",
+    message: {
+      from: (0, import_viem8.getAddress)(authorization.from),
+      to: (0, import_viem8.getAddress)(authorization.to),
+      value: BigInt(authorization.value),
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      nonce: authorization.nonce
+    },
+    signature
+  });
+}
+async function verifyPermit2Signature(signer, permit, signature, chainId) {
+  return verifyTypedDataSignature(signer, {
+    address: (0, import_viem8.getAddress)(permit.from),
+    domain: {
+      name: "Permit2",
+      chainId,
+      verifyingContract: PERMIT2_ADDRESS
+    },
+    types: PERMIT2_TRANSFER_FROM_TYPES,
+    primaryType: "PermitTransferFrom",
+    message: {
+      permitted: {
+        token: (0, import_viem8.getAddress)(permit.permitted.token),
+        amount: BigInt(permit.permitted.amount)
+      },
+      spender: (0, import_viem8.getAddress)(permit.spender),
+      nonce: BigInt(permit.nonce),
+      deadline: BigInt(permit.deadline)
+    },
+    signature
+  });
+}
+function extraAddress(value) {
+  if (!value || !(0, import_viem8.isAddress)(value)) return import_viem8.zeroAddress;
+  return (0, import_viem8.getAddress)(value);
+}
+function isNonZeroAddress(value) {
+  if (!value || !(0, import_viem8.isAddress)(value)) return false;
+  return !(0, import_viem8.isAddressEqual)((0, import_viem8.getAddress)(value), import_viem8.zeroAddress);
+}
+function isSaltBindingOn(extra) {
+  return isNonZeroAddress(extra.receiverAuthorizer) || isNonZeroAddress(extra.policy);
+}
+function deriveBoundSalt(receiverAuthorizer, policy, saltNonce) {
+  const encoded = (0, import_viem8.encodeAbiParameters)(
+    [
+      { name: "typehash", type: "bytes32" },
+      { name: "receiverAuthorizer", type: "address" },
+      { name: "policy", type: "address" },
+      { name: "saltNonce", type: "uint256" }
+    ],
+    [SALT_BINDING_TYPEHASH, receiverAuthorizer, policy, BigInt(saltNonce)]
+  );
+  return (0, import_viem8.keccak256)(encoded);
+}
+
+// src/auth-capture/facilitator/utils.ts
+var SAFETY_MARGIN_SECONDS = 6;
+function facilitatorAddresses(signers) {
+  const seen = [];
+  for (const signer of signers) {
+    for (const address of signer.getAddresses()) {
+      if (!seen.some((existing) => (0, import_viem9.isAddressEqual)(existing, address))) {
+        seen.push(address);
+      }
+    }
+  }
+  return seen;
+}
+function resolveCaptureAuthorizerPool(signers, config) {
+  const configured = config?.captureAuthorizers;
+  if (!configured || configured.length === 0) {
+    return facilitatorAddresses(signers).map((address) => (0, import_viem9.getAddress)(address));
+  }
+  const pool = [];
+  for (const candidate of configured) {
+    if (!(0, import_viem9.isAddress)(candidate, { strict: false }) || !isNonZeroAddress(candidate)) {
+      throw new Error(`captureAuthorizers contains an empty or zero address: "${candidate}"`);
+    }
+    if (!selectSubmitter(signers, candidate)) {
+      throw new Error(`captureAuthorizer ${candidate} is not one of the signers' addresses`);
+    }
+    const checksummed = (0, import_viem9.getAddress)(candidate);
+    if (!pool.some((existing) => (0, import_viem9.isAddressEqual)(existing, checksummed))) {
+      pool.push(checksummed);
+    }
+  }
+  return pool;
+}
+function pickCaptureAuthorizer(pool, network, select) {
+  if (pool.length <= 1) return pool[0];
+  const selected = select?.(network, [...pool]);
+  if (selected && (0, import_viem9.isAddress)(selected, { strict: false })) {
+    const member = pool.find((candidate) => (0, import_viem9.isAddressEqual)(candidate, selected));
+    if (member) return member;
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function selectSubmitter(signers, address) {
+  return signers.find(
+    (signer) => signer.getAddresses().some((owned) => (0, import_viem9.isAddressEqual)(owned, address))
+  );
+}
+function resolveSubmitter(signers, extra) {
+  if (extra.operatorType === "delegated") {
+    return selectSubmitter(signers, extra.captureAuthorizer);
+  }
+  return signers[0];
+}
+var PAYMENT_STATE_RETRY_DELAYS_MS = [200, 400, 800, 1600];
+var PAYMENT_STATE_MAX_ATTEMPTS = PAYMENT_STATE_RETRY_DELAYS_MS.length + 1;
+function decodeRevertReason(err) {
+  if (err instanceof import_viem9.BaseError) {
+    const revert = err.walk(
+      (e) => e instanceof import_viem9.ContractFunctionRevertedError
+    );
+    if (revert instanceof import_viem9.ContractFunctionRevertedError) {
+      const errorName = revert.data?.errorName;
+      if (errorName && errorName in ESCROW_ERROR_TO_INVALID_REASON) {
+        return ESCROW_ERROR_TO_INVALID_REASON[errorName];
+      }
+    }
+  }
+  return ErrSimulationFailed;
+}
+function collectPayer(wirePayload) {
+  return isEip3009Payload(wirePayload) ? wirePayload.authorization.from : wirePayload.permit2Authorization.from;
+}
+async function simulateEscrowCall(signer, target, functionName, args, account, deployment) {
+  try {
+    await signer.readContract({
+      address: target,
+      abi: escrowAbiWithErrorsForDeployment(deployment),
+      functionName,
+      args,
+      account
+    });
+    return "ok";
+  } catch (err) {
+    return decodeRevertReason(err);
+  }
+}
+async function writeEscrowCall(signer, target, functionName, args, deployment, options) {
+  try {
+    const txHash = await signer.writeContract({
+      address: target,
+      abi: escrowAbiWithErrorsForDeployment(deployment),
+      functionName,
+      args,
+      gas: options?.gas,
+      dataSuffix: options?.dataSuffix
+    });
+    return { txHash };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Settlement failed" };
+  }
+}
+async function submitEscrowCall(signer, target, functionName, args, deployment, options) {
+  const written = await writeEscrowCall(signer, target, functionName, args, deployment, options);
+  if ("error" in written) {
+    return { error: written.error };
+  }
+  try {
+    const receipt = await signer.waitForTransactionReceipt({ hash: written.txHash });
+    if (receipt.status !== "success") {
+      return { error: "reverted", txHash: written.txHash };
+    }
+    return { txHash: written.txHash, logs: receipt.logs };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Settlement failed" };
+  }
+}
+function normalizePaymentState(raw) {
+  if (raw === null || raw === void 0) return void 0;
+  if (typeof raw === "object" && !Array.isArray(raw) && "state" in raw) {
+    return normalizePaymentState(raw.state);
+  }
+  if (Array.isArray(raw)) {
+    if (raw.length < 3) return void 0;
+    return {
+      hasCollectedPayment: Boolean(raw[0]),
+      capturableAmount: BigInt(raw[1]),
+      refundableAmount: BigInt(raw[2])
+    };
+  }
+  if (typeof raw === "object") {
+    const s = raw;
+    if (s.capturableAmount === void 0 && s.refundableAmount === void 0 && s.hasCollectedPayment === void 0) {
+      return void 0;
+    }
+    return {
+      hasCollectedPayment: Boolean(s.hasCollectedPayment),
+      capturableAmount: BigInt(s.capturableAmount),
+      refundableAmount: BigInt(s.refundableAmount)
+    };
+  }
+  return void 0;
+}
+async function readPaymentStateOnce(signer, paymentInfoHash, escrowAddress) {
+  try {
+    const raw = await signer.readContract({
+      address: escrowAddress,
+      abi: ESCROW_VIEW_ABI,
+      functionName: "paymentState",
+      args: [paymentInfoHash]
+    });
+    return normalizePaymentState(raw);
+  } catch {
+    return void 0;
+  }
+}
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function paymentStateBalancesMatch(state, expectedCapturable, expectedRefundable) {
+  return state.capturableAmount === expectedCapturable && state.refundableAmount === expectedRefundable;
+}
+function isLikelyStalePaymentState(state, expectedCapturable, expectedRefundable) {
+  return (expectedCapturable > 0n || expectedRefundable > 0n) && !state.hasCollectedPayment && state.capturableAmount === 0n && state.refundableAmount === 0n;
+}
+async function readPaymentStateForBalances(signer, paymentInfoHash, expectedCapturable, expectedRefundable, escrowAddress) {
+  for (let attempt = 0; ; attempt++) {
+    const state = await readPaymentStateOnce(signer, paymentInfoHash, escrowAddress);
+    if (state && paymentStateBalancesMatch(state, expectedCapturable, expectedRefundable)) {
+      return { state, readFailed: false, attempts: attempt + 1 };
+    }
+    if (state && !isLikelyStalePaymentState(state, expectedCapturable, expectedRefundable)) {
+      return { state, readFailed: false, attempts: attempt + 1 };
+    }
+    if (attempt === PAYMENT_STATE_RETRY_DELAYS_MS.length) {
+      return { readFailed: true, attempts: attempt + 1 };
+    }
+    await sleep(PAYMENT_STATE_RETRY_DELAYS_MS[attempt]);
+  }
+}
+
+// src/auth-capture/facilitator/collect.ts
+var import_viem13 = require("viem");
+
+// src/exact/facilitator/errors.ts
+var ErrInvalidTransactionState = "invalid_transaction_state";
+var ErrSettlementPending2 = "settlement_pending";
+
+// src/shared/settleReceipt.ts
+async function waitAndReturnSettleResponse(signer, tx, network, payer, options = {}) {
+  const {
+    failedStatusReason = ErrInvalidTransactionState,
+    validateReceipt,
+    amount,
+    onSuccess
+  } = options;
+  if (!isValidTxHash(tx)) {
+    return invalidBroadcastHashResponse(tx, failedStatusReason, network, payer);
+  }
+  let receipt;
+  try {
+    receipt = await signer.waitForTransactionReceipt({ hash: tx });
+  } catch (error) {
+    return settlementPendingResponse(tx, network, payer, error);
+  }
+  try {
+    if (receipt.status !== "success") {
+      return {
+        success: false,
+        errorReason: failedStatusReason,
+        transaction: tx,
+        network,
+        payer
+      };
+    }
+    const validationFailure = validateReceipt?.(receipt);
+    if (validationFailure) {
+      return validationFailure;
+    }
+    if (onSuccess) {
+      return await onSuccess(receipt);
+    }
+    return {
+      success: true,
+      transaction: tx,
+      network,
+      payer,
+      ...amount !== void 0 ? { amount } : {}
+    };
+  } catch (error) {
+    return settlementPendingResponse(tx, network, payer, error);
+  }
+}
+async function withPendingSettlementStore(store, pendingKey, settle, nonRetryableReason = ErrInvalidTransactionState) {
+  const result = await settle();
+  if (!pendingKey) {
+    return result;
+  }
+  const isPending = !result.success && result.errorReason === ErrSettlementPending2 && !!result.transaction;
+  if (isPending) {
+    try {
+      await store.set(pendingKey, result.transaction);
+    } catch (storeError) {
+      return {
+        ...result,
+        errorReason: nonRetryableReason,
+        errorMessage: `settlement_pending, but failed to persist for retry: ${storeError instanceof Error ? storeError.message : String(storeError)}`
+      };
+    }
+    return result;
+  }
+  try {
+    await store.delete(pendingKey);
+  } catch {
+  }
+  return result;
+}
+function settlementPendingResponse(tx, network, payer, error) {
+  return {
+    success: false,
+    errorReason: ErrSettlementPending2,
+    errorMessage: truncateErrorMessage(error instanceof Error ? error.message : String(error)),
+    transaction: tx,
+    network,
+    payer
+  };
+}
+
+// src/auth-capture/utils.ts
+function reconstructPaymentInfo(payer, preApprovalExpiry, salt, requirements, extra, maxAmount = requirements.amount) {
+  return {
+    operator: extra.captureAuthorizer,
+    payer,
+    receiver: requirements.payTo,
+    token: requirements.asset,
+    maxAmount,
+    preApprovalExpiry,
+    authorizationExpiry: extra.captureDeadline,
+    refundExpiry: extra.refundDeadline,
+    minFeeBps: extra.minFeeBps,
+    maxFeeBps: extra.maxFeeBps,
+    feeReceiver: extra.feeRecipient,
+    salt
+  };
+}
+function paymentInfoToContractTuple(p) {
+  return { ...p, maxAmount: BigInt(p.maxAmount), salt: BigInt(p.salt) };
+}
+function unpackForSettle(wirePayload, assetTransferMethod, deployment) {
+  if (assetTransferMethod === "eip3009") {
+    const p2 = wirePayload;
+    return {
+      preApprovalExpiry: Number(p2.authorization.validBefore),
+      amount: BigInt(p2.authorization.value),
+      tokenCollector: deployment.eip3009Collector,
+      collectorData: p2.signature
+    };
+  }
+  const p = wirePayload;
+  return {
+    preApprovalExpiry: Number(p.permit2Authorization.deadline),
+    amount: BigInt(p.permit2Authorization.permitted.amount),
+    tokenCollector: deployment.permit2Collector,
+    collectorData: p.signature
+  };
+}
+
+// src/auth-capture/authorizerSigner.ts
+var import_viem10 = require("viem");
+function getOperatorEip712Domain(chainId, captureAuthorizer) {
+  return {
+    name: OPERATOR_EIP712_DOMAIN.name,
+    version: OPERATOR_EIP712_DOMAIN.version,
+    chainId,
+    verifyingContract: (0, import_viem10.getAddress)(captureAuthorizer)
+  };
+}
+async function signCharge(signer, chainId, captureAuthorizer, deployment, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: chargeTypesForDeployment(deployment),
+    primaryType: "Charge",
+    message: chargeMessage(deployment, digest)
+  });
+}
+async function signVoid(signer, chainId, captureAuthorizer, paymentInfoHash) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: VOID_TYPES,
+    primaryType: "Void",
+    message: { paymentInfoHash }
+  });
+}
+async function signCapture(signer, chainId, captureAuthorizer, deployment, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: captureTypesForDeployment(deployment),
+    primaryType: "Capture",
+    message: captureMessage(deployment, digest)
+  });
+}
+async function signRefund(signer, chainId, captureAuthorizer, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: REFUND_TYPES,
+    primaryType: "Refund",
+    message: refundMessage(digest)
+  });
+}
+async function verifyCharge(facilitatorSigner, authorizer, chainId, captureAuthorizer, deployment, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: (0, import_viem10.getAddress)(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: chargeTypesForDeployment(deployment),
+    primaryType: "Charge",
+    message: chargeMessage(deployment, digest),
+    signature
+  });
+}
+async function verifyVoid(facilitatorSigner, authorizer, chainId, captureAuthorizer, paymentInfoHash, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: (0, import_viem10.getAddress)(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: VOID_TYPES,
+    primaryType: "Void",
+    message: { paymentInfoHash },
+    signature
+  });
+}
+async function verifyCapture(facilitatorSigner, authorizer, chainId, captureAuthorizer, deployment, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: (0, import_viem10.getAddress)(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: captureTypesForDeployment(deployment),
+    primaryType: "Capture",
+    message: captureMessage(deployment, digest),
+    signature
+  });
+}
+async function verifyRefund(facilitatorSigner, authorizer, chainId, captureAuthorizer, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: (0, import_viem10.getAddress)(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: REFUND_TYPES,
+    primaryType: "Refund",
+    message: refundMessage(digest),
+    signature
+  });
+}
+function chargeMessage(deployment, digest) {
+  const base = {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    tokenCollector: (0, import_viem10.getAddress)(digest.tokenCollector),
+    collectorDataHash: (0, import_viem10.keccak256)(digest.collectorData),
+    feeReceiver: (0, import_viem10.getAddress)(digest.feeReceiver)
+  };
+  if (deployment.version === "v1.0") {
+    return { ...base, feeBps: digest.feeBps };
+  }
+  return { ...base, feeAmount: BigInt(digest.feeAmount) };
+}
+function captureMessage(deployment, digest) {
+  const base = {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    feeReceiver: (0, import_viem10.getAddress)(digest.feeReceiver),
+    expectedCapturableAmount: BigInt(digest.expectedCapturableAmount),
+    expectedRefundableAmount: BigInt(digest.expectedRefundableAmount)
+  };
+  if (deployment.version === "v1.0") {
+    return { ...base, feeBps: digest.feeBps };
+  }
+  return { ...base, feeAmount: BigInt(digest.feeAmount) };
+}
+function refundMessage(digest) {
+  return {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    tokenCollector: (0, import_viem10.getAddress)(digest.tokenCollector),
+    expectedCapturableAmount: BigInt(digest.expectedCapturableAmount),
+    expectedRefundableAmount: BigInt(digest.expectedRefundableAmount)
+  };
+}
+
+// src/auth-capture/facilitator/delegatedAuth.ts
+var import_viem11 = require("viem");
+var AuthCaptureCallerIdentityConflictError = class extends Error {
+  /** Create the first-writer-wins identity conflict. */
+  constructor() {
+    super("delegated auth binding already exists for a different identity");
+    this.name = "AuthCaptureCallerIdentityConflictError";
+  }
+};
+function getDelegatedAuthorizer(config, receiverAuthorizer) {
+  const signer = config?.authorizerSigner;
+  const resolveCallerIdentity = config?.resolveCallerIdentity;
+  const storage = config?.delegatedAuthStorage;
+  const onStorageError = config?.onStorageError;
+  if (!signer || !resolveCallerIdentity || !storage || !onStorageError) return void 0;
+  if (!(0, import_viem11.isAddressEqual)(signer.address, receiverAuthorizer)) return void 0;
+  return { signer, resolveCallerIdentity, storage, onStorageError };
+}
+async function resolveDelegatedCallerIdentity(delegated, ctx) {
+  try {
+    const identity = await delegated.resolveCallerIdentity(ctx);
+    return typeof identity === "string" && identity.length > 0 ? identity : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function reportDelegatedStorageError(delegated, error, network, paymentInfoHash) {
+  delegated.onStorageError(error, network, paymentInfoHash);
+}
+async function bindThenBroadcast(args) {
+  const { delegated, record } = args;
+  let write;
+  try {
+    write = await delegated.storage.bind(record);
+  } catch (error) {
+    return { ok: false, reason: "unavailable", error };
+  }
+  if (write.record.callerIdentity !== record.callerIdentity) {
+    return { ok: false, reason: "conflict", error: new AuthCaptureCallerIdentityConflictError() };
+  }
+  const outcome = await args.broadcast();
+  if (outcome.disposition === "revert") {
+    try {
+      await delegated.storage.revertBind(write);
+    } catch (error) {
+      reportDelegatedStorageError(delegated, error, record.network, record.paymentInfoHash);
+    }
+  }
+  return { ok: true, value: outcome.value };
+}
+function assertDelegatedAuthStorage(storage) {
+  const candidate = storage;
+  if (typeof candidate.bind !== "function" || typeof candidate.revertBind !== "function" || typeof candidate.get !== "function" || typeof candidate.delete !== "function") {
+    throw new Error("delegatedAuthStorage must implement bind, revertBind, get, and delete");
+  }
+}
+var InMemoryAuthCaptureDelegatedAuthStorage = class {
+  constructor() {
+    this.rows = /* @__PURE__ */ new Map();
+    this.nextToken = 0;
+  }
+  /** @inheritdoc */
+  async bind(record) {
+    this.purgeExpired();
+    const key = rowKey(record.network, record.paymentInfoHash);
+    const existing = this.rows.get(key);
+    const revertToken = String(++this.nextToken);
+    if (!existing) {
+      this.rows.set(key, { record: { ...record }, revertToken });
+      return { record: { ...record }, revertToken };
+    }
+    if (existing.record.callerIdentity === record.callerIdentity) {
+      existing.revertToken = revertToken;
+    }
+    return { record: { ...existing.record }, revertToken: "" };
+  }
+  /** @inheritdoc */
+  async revertBind(write) {
+    if (write.revertToken === "") return;
+    const key = rowKey(write.record.network, write.record.paymentInfoHash);
+    if (this.rows.get(key)?.revertToken !== write.revertToken) return;
+    this.rows.delete(key);
+  }
+  /** @inheritdoc */
+  async get(network, paymentInfoHash) {
+    const key = rowKey(network, paymentInfoHash);
+    const existing = this.rows.get(key);
+    if (!existing) return void 0;
+    if (isExpired(existing.record)) {
+      this.rows.delete(key);
+      return void 0;
+    }
+    return { ...existing.record };
+  }
+  /** @inheritdoc */
+  async delete(network, paymentInfoHash) {
+    this.rows.delete(rowKey(network, paymentInfoHash));
+  }
+  /** Drop every expired row. */
+  purgeExpired() {
+    for (const [key, row] of this.rows) {
+      if (isExpired(row.record)) this.rows.delete(key);
+    }
+  }
+};
+function isExpired(record) {
+  return record.expiresAt <= Math.floor(Date.now() / 1e3);
+}
+function rowKey(network, paymentInfoHash) {
+  return `${network}\0${paymentInfoHash.toLowerCase()}`;
+}
+
+// src/auth-capture/extra.ts
+var import_viem12 = require("viem");
+var MAX_FEE_BPS = 1e4;
+function parseAuthCaptureExtra(extra) {
+  if (!isAuthCaptureExtra(extra)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const raw = extra;
+  if (raw.autoCapture === true) {
+    return { error: ErrUnsupportedPaymentFlow };
+  }
+  const deployment = resolveAuthCaptureDeployment(raw.authCaptureEscrow);
+  if (!deployment) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const paymentFlow = raw.paymentFlow ?? "escrow";
+  if (paymentFlow !== "escrow" && paymentFlow !== "authorization") {
+    return { error: ErrUnsupportedPaymentFlow };
+  }
+  const captureMode = raw.captureMode ?? "sync";
+  if (captureMode !== "sync" && captureMode !== "deferred") {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const operatorType = raw.operatorType ?? "delegated";
+  if (operatorType === "policy") {
+    return { error: ErrUnsupportedOperatorType };
+  }
+  if (operatorType !== "delegated" && operatorType !== "custom") {
+    return { error: ErrUnsupportedOperatorType };
+  }
+  const assetTransferMethod = raw.assetTransferMethod ?? "eip3009";
+  if (assetTransferMethod !== "eip3009" && assetTransferMethod !== "permit2") {
+    return { error: ErrUnsupportedAssetTransferMethod };
+  }
+  if (!Number.isInteger(raw.minFeeBps) || !Number.isInteger(raw.maxFeeBps) || raw.minFeeBps < 0 || raw.maxFeeBps < 0 || raw.minFeeBps > MAX_FEE_BPS || raw.maxFeeBps > MAX_FEE_BPS) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  if (raw.minFeeBps > raw.maxFeeBps) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  if (!(0, import_viem12.isAddress)(raw.captureAuthorizer) || !(0, import_viem12.isAddress)(raw.feeRecipient)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const feeRecipient = (0, import_viem12.getAddress)(raw.feeRecipient);
+  if ((0, import_viem12.isAddressEqual)(feeRecipient, import_viem12.zeroAddress) && (raw.minFeeBps !== 0 || raw.maxFeeBps !== 0)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const receiverAuthorizer = extraAddress(raw.receiverAuthorizer);
+  if (paymentFlow === "authorization" && !isNonZeroAddress(receiverAuthorizer)) {
+    return { error: ErrMissingReceiverAuthorizer };
+  }
+  return {
+    extra: {
+      ...raw,
+      captureAuthorizer: (0, import_viem12.getAddress)(raw.captureAuthorizer),
+      feeRecipient,
+      paymentFlow,
+      captureMode,
+      operatorType,
+      assetTransferMethod,
+      receiverAuthorizer,
+      policy: extraAddress(raw.policy),
+      authCaptureEscrow: deployment.escrow,
+      deployment
+    }
+  };
+}
+function feeFieldMatchesDeployment(deployment, fields) {
+  if (deployment.version === "v1.0") {
+    return fields.feeBps !== void 0 && fields.feeAmount === void 0;
+  }
+  return fields.feeAmount !== void 0 && fields.feeBps === void 0;
+}
+function validateSubmittedFee(extra, amount, fee) {
+  const amountBig = typeof amount === "bigint" ? amount : BigInt(amount);
+  const feeReceiver = fee.feeReceiver;
+  if (!(0, import_viem12.isAddress)(feeReceiver)) {
+    return ErrInvalidFeeReceiver;
+  }
+  const receiver = (0, import_viem12.getAddress)(feeReceiver);
+  if (!(0, import_viem12.isAddressEqual)(extra.feeRecipient, import_viem12.zeroAddress)) {
+    if (!(0, import_viem12.isAddressEqual)(receiver, extra.feeRecipient)) {
+      return ErrInvalidFeeReceiver;
+    }
+  }
+  if (fee.version === "v1.0") {
+    const feeBps = fee.feeBps;
+    if (!Number.isInteger(feeBps) || feeBps < extra.minFeeBps || feeBps > extra.maxFeeBps) {
+      return ErrFeeBpsOutOfRange;
+    }
+    if ((0, import_viem12.isAddressEqual)(receiver, import_viem12.zeroAddress) && feeBps !== 0) {
+      return ErrZeroFeeReceiver;
+    }
+    return void 0;
+  }
+  let feeAmount;
+  try {
+    feeAmount = BigInt(fee.feeAmount);
+  } catch {
+    return ErrFeeBpsOutOfRange;
+  }
+  const minFee = feeAmountFromBps(amountBig, extra.minFeeBps);
+  const maxFee = feeAmountFromBps(amountBig, extra.maxFeeBps);
+  if (feeAmount < minFee || feeAmount > maxFee) {
+    return ErrFeeBpsOutOfRange;
+  }
+  if ((0, import_viem12.isAddressEqual)(receiver, import_viem12.zeroAddress) && feeAmount !== 0n) {
+    return ErrZeroFeeReceiver;
+  }
+  return void 0;
+}
+function defaultSubmittedFee(extra, amount) {
+  const amountBig = typeof amount === "bigint" ? amount : BigInt(amount);
+  if (extra.deployment.version === "v1.0") {
+    return { version: "v1.0", feeBps: extra.minFeeBps, feeReceiver: extra.feeRecipient };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: feeAmountFromBps(amountBig, extra.minFeeBps).toString(),
+    feeReceiver: extra.feeRecipient
+  };
+}
+function submittedFeeAmount(fee, amount) {
+  if (fee.version === "v1.0") {
+    return feeAmountFromBps(amount, fee.feeBps);
+  }
+  return BigInt(fee.feeAmount);
+}
+function validateOperator(extra, submitters, config, isLifecycle) {
+  if (isNonZeroAddress(extra.policy)) {
+    return ErrInvalidPolicy;
+  }
+  if (extra.operatorType === "custom") {
+    if (!isOperatorAdmitted(extra.captureAuthorizer, config?.operators)) {
+      return ErrOperatorNotAdmitted;
+    }
+    if (isLifecycle) {
+      return ErrLifecycleNotRelayed;
+    }
+    return void 0;
+  }
+  if (!isSubmitter(extra.captureAuthorizer, submitters)) {
+    return ErrOperatorNotAdmitted;
+  }
+  if (isLifecycle && !isNonZeroAddress(extra.receiverAuthorizer)) {
+    return ErrLifecycleNotRelayed;
+  }
+  return void 0;
+}
+function isSubmitter(address, submitters) {
+  return submitters.some((s) => (0, import_viem12.isAddressEqual)(s, address));
+}
+function isOperatorAdmitted(address, operators) {
+  if (!operators || operators.length === 0) return false;
+  return operators.some((entry) => {
+    if (entry.operatorType !== "custom") return false;
+    if (entry.address === "*") return true;
+    return (0, import_viem12.isAddress)(entry.address) && (0, import_viem12.isAddressEqual)(entry.address, address);
+  });
+}
+function resolveSettleTarget(extra) {
+  return extra.operatorType === "custom" ? extra.captureAuthorizer : extra.deployment.escrow;
+}
+function verifyCommon(payloadScheme, payloadNetwork, requirements, scheme, submitters, config, isLifecycle) {
+  if (payloadScheme !== scheme || requirements.scheme !== scheme) {
+    return { error: ErrUnsupportedScheme };
+  }
+  if (payloadNetwork !== requirements.network) {
+    return { error: ErrNetworkMismatch };
+  }
+  try {
+    getEvmChainId(requirements.network);
+  } catch {
+    return { error: ErrInvalidNetwork };
+  }
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  if ("error" in parsed) {
+    return parsed;
+  }
+  const operatorError = validateOperator(parsed.extra, submitters, config, isLifecycle);
+  if (operatorError) {
+    return { error: operatorError };
+  }
+  return parsed;
+}
+function captureFeeFromPayload(extra, wirePayload) {
+  if (!feeFieldMatchesDeployment(extra.deployment, wirePayload)) {
+    return void 0;
+  }
+  if (extra.deployment.version === "v1.0") {
+    return {
+      version: "v1.0",
+      feeBps: wirePayload.feeBps,
+      feeReceiver: wirePayload.feeReceiver
+    };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: wirePayload.feeAmount,
+    feeReceiver: wirePayload.feeReceiver
+  };
+}
+function captureEscrowArgs(tuple, amount, fee) {
+  if (fee.version === "v1.0") {
+    return [tuple, amount, fee.feeBps, fee.feeReceiver];
+  }
+  return [tuple, amount, BigInt(fee.feeAmount), fee.feeReceiver];
+}
+function chargeEscrowArgs(tuple, amount, tokenCollector, collectorData, fee) {
+  if (fee.version === "v1.0") {
+    return [tuple, amount, tokenCollector, collectorData, fee.feeBps, fee.feeReceiver];
+  }
+  return [
+    tuple,
+    amount,
+    tokenCollector,
+    collectorData,
+    BigInt(fee.feeAmount),
+    fee.feeReceiver
+  ];
+}
+function chargeFeeFromCollectPayload(extra, wirePayload) {
+  if (!feeFieldMatchesDeployment(extra.deployment, wirePayload)) {
+    return void 0;
+  }
+  if (extra.deployment.version === "v1.0") {
+    return {
+      version: "v1.0",
+      feeBps: wirePayload.feeBps,
+      feeReceiver: wirePayload.feeReceiver
+    };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: wirePayload.feeAmount,
+    feeReceiver: wirePayload.feeReceiver
+  };
+}
+
+// src/auth-capture/facilitator/collect.ts
+function collectSaltNonce(payload) {
+  return "saltNonce" in payload ? payload.saltNonce : void 0;
+}
+function collectChargeAmount(payload) {
+  return "amount" in payload && typeof payload.amount === "string" ? payload.amount : void 0;
+}
+function collectAuthorizerSignature(payload) {
+  return "authorizerSignature" in payload ? payload.authorizerSignature : void 0;
+}
+function chargeDigestFor(paymentInfoHash, amount, unpacked, fee) {
+  const base = {
+    paymentInfoHash,
+    amount,
+    tokenCollector: unpacked.tokenCollector,
+    collectorData: unpacked.collectorData,
+    feeReceiver: fee.feeReceiver
+  };
+  return fee.version === "v1.0" ? { ...base, feeBps: fee.feeBps } : { ...base, feeAmount: fee.feeAmount };
+}
+function invalidPayerSignatureReason(isDeployedAtPayer, innerSignature) {
+  return !isDeployedAtPayer && (0, import_viem13.size)(innerSignature) !== 65 ? ErrUndeployedSmartWallet : ErrInvalidAuthCaptureSignature;
+}
+async function verifyCollect(signers, config, payload, requirements, wirePayload, dataSuffix, requireChargeCompletion = false) {
+  const payer = collectPayer(wirePayload);
+  const common = verifyCommon(
+    payload.accepted.scheme,
+    payload.accepted.network,
+    requirements,
+    AUTH_CAPTURE_SCHEME,
+    facilitatorAddresses(signers),
+    config,
+    false
+  );
+  if ("error" in common) {
+    return { isValid: false, invalidReason: common.error, payer };
+  }
+  const extra = common.extra;
+  const submitter = resolveSubmitter(signers, extra);
+  if (!submitter) {
+    return { isValid: false, invalidReason: ErrOperatorNotAdmitted, payer };
+  }
+  const bindOn = isSaltBindingOn(extra);
+  const saltNonce = collectSaltNonce(wirePayload);
+  if (bindOn && saltNonce === void 0) {
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+  }
+  if (!bindOn && saltNonce !== void 0) {
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+  }
+  const hasChargeCompletion = collectChargeAmount(wirePayload) !== void 0;
+  const isCharge = extra.paymentFlow === "authorization";
+  if (!isCharge && hasChargeCompletion || isCharge && requireChargeCompletion && !hasChargeCompletion) {
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+  }
+  if (extra.assetTransferMethod === "eip3009" && !isEip3009Payload(wirePayload)) {
+    return { isValid: false, invalidReason: ErrPayloadMethodMismatch, payer };
+  }
+  if (extra.assetTransferMethod === "permit2" && !isPermit2Payload(wirePayload)) {
+    return { isValid: false, invalidReason: ErrPayloadMethodMismatch, payer };
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  if (extra.captureDeadline <= now + SAFETY_MARGIN_SECONDS) {
+    return { isValid: false, invalidReason: ErrCaptureDeadlineExpired, payer };
+  }
+  if (extra.refundDeadline < extra.captureDeadline) {
+    return { isValid: false, invalidReason: ErrInvalidDeadlineOrdering, payer };
+  }
+  if (now + requirements.maxTimeoutSeconds > extra.captureDeadline) {
+    return { isValid: false, invalidReason: ErrInvalidDeadlineOrdering, payer };
+  }
+  const chainId = getEvmChainId(requirements.network);
+  const unpacked = unpackForSettle(wirePayload, extra.assetTransferMethod, extra.deployment);
+  if (unpacked.preApprovalExpiry <= now + SAFETY_MARGIN_SECONDS) {
+    return { isValid: false, invalidReason: ErrAuthorizationExpired, payer };
+  }
+  if (unpacked.preApprovalExpiry > extra.captureDeadline) {
+    return { isValid: false, invalidReason: ErrInvalidDeadlineOrdering, payer };
+  }
+  if (extra.assetTransferMethod === "eip3009") {
+    const eipPayload = wirePayload;
+    if (Number(eipPayload.authorization.validAfter) > now) {
+      return { isValid: false, invalidReason: ErrAuthorizationNotYetValid, payer };
+    }
+    if (eipPayload.authorization.to.toLowerCase() !== extra.deployment.eip3009Collector.toLowerCase()) {
+      return { isValid: false, invalidReason: ErrTokenCollectorMismatch, payer };
+    }
+  } else {
+    const permitPayload = wirePayload;
+    if (permitPayload.permit2Authorization.spender.toLowerCase() !== extra.deployment.permit2Collector.toLowerCase()) {
+      return { isValid: false, invalidReason: ErrTokenCollectorMismatch, payer };
+    }
+    if (permitPayload.permit2Authorization.permitted.token.toLowerCase() !== requirements.asset.toLowerCase()) {
+      return { isValid: false, invalidReason: ErrTokenMismatch, payer };
+    }
+  }
+  const { isCounterfactual, isDeployedAtPayer, innerSignature, eip6492Deployment } = await classifyErc6492Payer(submitter, wirePayload.signature, payer);
+  if (isCounterfactual) {
+    const factory = eip6492Deployment?.factoryAddress;
+    const factoryAllowed = !!factory && (config?.eip6492AllowedFactories ?? []).some(
+      (allowed) => allowed.trim().toLowerCase() === factory.toLowerCase()
+    );
+    if (!factoryAllowed) {
+      return { isValid: false, invalidReason: ErrErc6492FactoryNotAllowed, payer };
+    }
+  } else {
+    const signatureValid = extra.assetTransferMethod === "eip3009" ? await verifyERC3009Signature(
+      submitter,
+      wirePayload.authorization,
+      innerSignature,
+      { ...extra, chainId },
+      requirements.asset
+    ) : await verifyPermit2Signature(
+      submitter,
+      wirePayload.permit2Authorization,
+      innerSignature,
+      chainId
+    );
+    if (!signatureValid) {
+      return {
+        isValid: false,
+        invalidReason: invalidPayerSignatureReason(isDeployedAtPayer, innerSignature),
+        payer
+      };
+    }
+  }
+  const originalMax = payload.accepted.amount;
+  if (unpacked.amount !== BigInt(originalMax)) {
+    return { isValid: false, invalidReason: ErrAmountMismatch, payer };
+  }
+  let settleAmount = unpacked.amount;
+  let fee = defaultSubmittedFee(extra, settleAmount);
+  if (hasChargeCompletion) {
+    const chargeAmount = collectChargeAmount(wirePayload);
+    if (chargeAmount === void 0) {
+      return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+    }
+    settleAmount = BigInt(chargeAmount);
+    if (settleAmount <= 0n || settleAmount > unpacked.amount) {
+      return { isValid: false, invalidReason: ErrAmountMismatch, payer };
+    }
+    const chargeFee = chargeFeeFromCollectPayload(extra, wirePayload);
+    if (!chargeFee) {
+      return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+    }
+    fee = chargeFee;
+    const feeError = validateSubmittedFee(extra, settleAmount, fee);
+    if (feeError) {
+      return { isValid: false, invalidReason: feeError, payer };
+    }
+  }
+  if (bindOn && saltNonce !== void 0) {
+    const expectedSalt = deriveBoundSalt(extra.receiverAuthorizer, extra.policy, saltNonce);
+    if (BigInt(wirePayload.salt) !== BigInt(expectedSalt)) {
+      return { isValid: false, invalidReason: ErrSaltBindingMismatch, payer };
+    }
+  }
+  const paymentInfo = reconstructPaymentInfo(
+    payer,
+    unpacked.preApprovalExpiry,
+    wirePayload.salt,
+    { ...requirements, amount: originalMax },
+    extra,
+    originalMax
+  );
+  const expectedNonce = computePayerAgnosticPaymentInfoHash(
+    chainId,
+    paymentInfo,
+    extra.deployment.escrow
+  );
+  if (extra.assetTransferMethod === "eip3009") {
+    const wireNonce = wirePayload.authorization.nonce;
+    if (wireNonce.toLowerCase() !== expectedNonce.toLowerCase()) {
+      return { isValid: false, invalidReason: ErrNonceMismatch, payer };
+    }
+  } else {
+    const wireNonce = BigInt(wirePayload.permit2Authorization.nonce);
+    if (wireNonce !== (0, import_viem13.hexToBigInt)(expectedNonce)) {
+      return { isValid: false, invalidReason: ErrNonceMismatch, payer };
+    }
+  }
+  if (hasChargeCompletion) {
+    const authorizerSignature = collectAuthorizerSignature(wirePayload);
+    if (authorizerSignature) {
+      const ok = await verifyCharge(
+        submitter,
+        extra.receiverAuthorizer,
+        chainId,
+        extra.captureAuthorizer,
+        extra.deployment,
+        chargeDigestFor(
+          computePaymentInfoHash(chainId, paymentInfo, extra.deployment.escrow),
+          settleAmount,
+          unpacked,
+          fee
+        ),
+        authorizerSignature
+      );
+      if (!ok) {
+        return { isValid: false, invalidReason: ErrAuthorizerSignature, payer };
+      }
+    } else if (!getDelegatedAuthorizer(config, extra.receiverAuthorizer)) {
+      return { isValid: false, invalidReason: ErrAuthorizerSignature, payer };
+    }
+  }
+  const simulateResult = await simulateCollect(
+    submitter,
+    config,
+    extra,
+    paymentInfo,
+    settleAmount,
+    unpacked.tokenCollector,
+    unpacked.collectorData,
+    fee,
+    chainId,
+    dataSuffix
+  );
+  if (simulateResult !== "ok") {
+    try {
+      const balance = await submitter.readContract({
+        address: requirements.asset,
+        abi: ERC20_BALANCE_OF_ABI,
+        functionName: "balanceOf",
+        args: [payer]
+      });
+      if (balance < unpacked.amount) {
+        return { isValid: false, invalidReason: ErrInsufficientBalance, payer };
+      }
+    } catch {
+    }
+    return { isValid: false, invalidReason: simulateResult, payer };
+  }
+  return { isValid: true, payer };
+}
+async function awaitCollectSettlement(store, pendingKey, tx, execution, customBalanceCheck, isReconcile) {
+  const {
+    submitter,
+    extra,
+    payer,
+    network,
+    paymentInfo,
+    paymentInfoHash,
+    functionName,
+    settleAmount,
+    fee,
+    tokenCollector
+  } = execution;
+  const expectedCapturable = functionName === "authorize" ? settleAmount : 0n;
+  const expectedRefundable = functionName === "charge" ? settleAmount : 0n;
+  return withPendingSettlementStore(
+    store,
+    pendingKey,
+    () => waitAndReturnSettleResponse(submitter, tx, network, payer, {
+      failedStatusReason: ErrTransactionReverted,
+      validateReceipt: (receipt) => {
+        if (extra.operatorType !== "custom") {
+          return void 0;
+        }
+        const eventOk = functionName === "charge" ? verifyPaymentChargedEvent(receipt.logs, extra.deployment, {
+          paymentInfoHash,
+          amount: settleAmount,
+          tokenCollector,
+          operator: extra.captureAuthorizer,
+          fee
+        }) : verifyPaymentAuthorizedEvent(receipt.logs, extra.deployment.escrow, {
+          paymentInfoHash,
+          amount: settleAmount,
+          tokenCollector,
+          operator: extra.captureAuthorizer
+        });
+        if (!eventOk) {
+          return {
+            success: false,
+            errorReason: ErrSimulationFailed,
+            transaction: tx,
+            network,
+            payer
+          };
+        }
+        return void 0;
+      },
+      onSuccess: async () => {
+        const { state, readFailed } = await readPaymentStateForBalances(
+          submitter,
+          paymentInfoHash,
+          expectedCapturable,
+          expectedRefundable,
+          extra.deployment.escrow
+        );
+        if (readFailed) {
+          throw new Error("payment state read failed after confirmed collect transaction");
+        }
+        if (!state || !state.hasCollectedPayment || state.capturableAmount !== expectedCapturable || state.refundableAmount !== expectedRefundable) {
+          return {
+            success: false,
+            errorReason: ErrUnexpectedPaymentState,
+            transaction: tx,
+            network,
+            payer
+          };
+        }
+        if (customBalanceCheck && !isReconcile) {
+          const after = await readCollectBalanceSnapshot(
+            submitter,
+            paymentInfo.token,
+            payer,
+            customBalanceCheck.tokenStore,
+            customBalanceCheck.facilitator,
+            functionName,
+            paymentInfo.receiver,
+            fee.feeReceiver
+          );
+          if (!after) {
+            throw new Error("balance read failed after confirmed collect transaction");
+          }
+          if (!hasExpectedCollectBalanceChanges(
+            customBalanceCheck.before,
+            after,
+            functionName,
+            settleAmount,
+            fee
+          )) {
+            return {
+              success: false,
+              errorReason: ErrSimulationFailed,
+              transaction: tx,
+              network,
+              payer
+            };
+          }
+        }
+        return {
+          success: true,
+          transaction: tx,
+          network,
+          payer,
+          amount: settleAmount.toString()
+        };
+      }
+    }),
+    ErrTransactionReverted
+  );
+}
+async function buildCollectSettleExecution(signers, payload, requirements, wirePayload, payerOverride) {
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  if ("error" in parsed) {
+    return {
+      success: false,
+      errorReason: parsed.error,
+      transaction: "",
+      network: requirements.network,
+      payer: payerOverride ?? collectPayer(wirePayload)
+    };
+  }
+  const extra = parsed.extra;
+  const submitter = resolveSubmitter(signers, extra);
+  if (!submitter) {
+    return {
+      success: false,
+      errorReason: ErrOperatorNotAdmitted,
+      transaction: "",
+      network: requirements.network,
+      payer: payerOverride ?? collectPayer(wirePayload)
+    };
+  }
+  const payer = payerOverride ?? collectPayer(wirePayload);
+  const unpacked = unpackForSettle(wirePayload, extra.assetTransferMethod, extra.deployment);
+  const originalMax = payload.accepted.amount;
+  const paymentInfo = reconstructPaymentInfo(
+    payer,
+    unpacked.preApprovalExpiry,
+    wirePayload.salt,
+    { ...requirements, amount: originalMax },
+    extra,
+    originalMax
+  );
+  const needsChargeCompletion = extra.paymentFlow === "authorization";
+  const functionName = extra.paymentFlow === "authorization" ? "charge" : "authorize";
+  let settleAmount = unpacked.amount;
+  let fee = defaultSubmittedFee(extra, settleAmount);
+  if (needsChargeCompletion) {
+    settleAmount = BigInt(collectChargeAmount(wirePayload) ?? originalMax);
+    const chargeFee = chargeFeeFromCollectPayload(extra, wirePayload);
+    if (chargeFee) {
+      fee = chargeFee;
+    }
+  }
+  const chainId = getEvmChainId(requirements.network);
+  const paymentInfoHash = computePaymentInfoHash(chainId, paymentInfo, extra.deployment.escrow);
+  return {
+    submitter,
+    extra,
+    payer,
+    network: requirements.network,
+    paymentInfo,
+    paymentInfoHash,
+    functionName,
+    settleAmount,
+    fee,
+    tokenCollector: unpacked.tokenCollector
+  };
+}
+async function snapshotCustomOperatorBalances(submitter, execution) {
+  if (execution.extra.operatorType !== "custom") {
+    return void 0;
+  }
+  const { extra, payer, paymentInfo, functionName, fee } = execution;
+  const facilitator = submitter.getAddresses()[0];
+  if (!facilitator) {
+    return {
+      success: false,
+      errorReason: ErrSimulationFailed,
+      transaction: "",
+      network: execution.network,
+      payer
+    };
+  }
+  let tokenStore;
+  try {
+    tokenStore = await submitter.readContract({
+      address: extra.deployment.escrow,
+      abi: ESCROW_VIEW_ABI,
+      functionName: "getTokenStore",
+      args: [extra.captureAuthorizer]
+    });
+  } catch {
+    return {
+      success: false,
+      errorReason: ErrSimulationFailed,
+      transaction: "",
+      network: execution.network,
+      payer
+    };
+  }
+  const before = await readCollectBalanceSnapshot(
+    submitter,
+    paymentInfo.token,
+    payer,
+    tokenStore,
+    facilitator,
+    functionName,
+    paymentInfo.receiver,
+    fee.feeReceiver
+  );
+  if (!before) {
+    return {
+      success: false,
+      errorReason: ErrSimulationFailed,
+      transaction: "",
+      network: execution.network,
+      payer
+    };
+  }
+  return { before, tokenStore, facilitator };
+}
+async function settleCollect(signers, config, payload, requirements, wirePayload, store, context) {
+  const pendingKey = wirePayload.signature;
+  const payer = collectPayer(wirePayload);
+  if (pendingKey) {
+    const cachedTx = await store.get(pendingKey);
+    if (cachedTx) {
+      const execution2 = await buildCollectSettleExecution(
+        signers,
+        payload,
+        requirements,
+        wirePayload,
+        payer
+      );
+      if ("success" in execution2) {
+        return {
+          success: false,
+          errorReason: ErrSettlementPending,
+          transaction: cachedTx,
+          network: requirements.network,
+          payer
+        };
+      }
+      await store.delete(pendingKey);
+      return awaitCollectSettlement(
+        store,
+        pendingKey,
+        cachedTx,
+        execution2,
+        void 0,
+        true
+      );
+    }
+  }
+  const dataSuffix = await resolveDataSuffix(context, {
+    paymentPayload: payload,
+    paymentRequirements: requirements
+  });
+  const verification = await verifyCollect(
+    signers,
+    config,
+    payload,
+    requirements,
+    wirePayload,
+    dataSuffix,
+    true
+  );
+  if (!verification.isValid) {
+    return {
+      success: false,
+      errorReason: verification.invalidReason ?? ErrVerificationFailed,
+      errorMessage: verification.invalidMessage,
+      transaction: "",
+      network: requirements.network,
+      payer: verification.payer
+    };
+  }
+  const execution = await buildCollectSettleExecution(
+    signers,
+    payload,
+    requirements,
+    wirePayload,
+    verification.payer
+  );
+  if ("success" in execution) {
+    return execution;
+  }
+  const delegated = getDelegatedAuthorizer(config, execution.extra.receiverAuthorizer);
+  if (delegated) {
+    const authenticated = await authenticateDelegatedCollect(
+      delegated,
+      config,
+      payload,
+      requirements,
+      wirePayload,
+      execution,
+      context
+    );
+    if ("success" in authenticated) {
+      return authenticated;
+    }
+    const broadcast = () => broadcastCollect(config, wirePayload, execution, store, pendingKey, dataSuffix);
+    if (!authenticated.bindRecord) {
+      return (await broadcast()).value;
+    }
+    const bound = await bindThenBroadcast({
+      delegated,
+      record: authenticated.bindRecord,
+      broadcast
+    });
+    if (!bound.ok) {
+      return {
+        success: false,
+        errorReason: bound.reason === "conflict" ? ErrUnauthenticatedAuthorizerRequest : ErrDelegatedAuthUnavailable,
+        ...bound.reason === "unavailable" ? {
+          errorMessage: `failed to bind delegated caller: ${truncateErrorMessage(bound.error instanceof Error ? bound.error.message : String(bound.error))}`
+        } : {},
+        transaction: "",
+        network: requirements.network,
+        payer: execution.payer
+      };
+    }
+    return bound.value;
+  }
+  return (await broadcastCollect(config, wirePayload, execution, store, pendingKey, dataSuffix)).value;
+}
+async function authenticateDelegatedCollect(delegated, config, payload, requirements, wirePayload, execution, context) {
+  const { extra, payer, network, paymentInfoHash, functionName } = execution;
+  const fail = (errorReason) => ({
+    success: false,
+    errorReason,
+    transaction: "",
+    network,
+    payer
+  });
+  const identity = await resolveDelegatedCallerIdentity(delegated, {
+    step: functionName,
+    paymentInfoHash,
+    network,
+    payer,
+    payload,
+    requirements,
+    facilitatorContext: context
+  });
+  if (!identity) {
+    return fail(ErrUnauthenticatedAuthorizerRequest);
+  }
+  if (functionName === "charge" && !collectAuthorizerSignature(wirePayload)) {
+    const chainId = getEvmChainId(requirements.network);
+    const unpacked = unpackForSettle(wirePayload, extra.assetTransferMethod, extra.deployment);
+    const digest = chargeDigestFor(
+      paymentInfoHash,
+      execution.settleAmount,
+      unpacked,
+      execution.fee
+    );
+    const signature = await signCharge(
+      delegated.signer,
+      chainId,
+      extra.captureAuthorizer,
+      extra.deployment,
+      digest
+    );
+    const ok = await verifyCharge(
+      execution.submitter,
+      extra.receiverAuthorizer,
+      chainId,
+      extra.captureAuthorizer,
+      extra.deployment,
+      digest,
+      signature
+    );
+    if (!ok) {
+      return fail(ErrAuthorizerSignature);
+    }
+  }
+  const relayable = extra.operatorType === "delegated" && (functionName === "authorize" || config?.refundFunding === true);
+  if (!relayable) {
+    return {};
+  }
+  return {
+    bindRecord: {
+      network,
+      paymentInfoHash,
+      callerIdentity: identity,
+      expiresAt: extra.refundDeadline
+    }
+  };
+}
+async function broadcastCollect(config, wirePayload, execution, store, pendingKey, dataSuffix) {
+  const customBalanceSnapshot = await snapshotCustomOperatorBalances(
+    execution.submitter,
+    execution
+  );
+  if (customBalanceSnapshot && "success" in customBalanceSnapshot) {
+    return { value: customBalanceSnapshot, disposition: "revert" };
+  }
+  const tuple = paymentInfoToContractTuple(execution.paymentInfo);
+  const unpackedSettle = unpackForSettle(
+    wirePayload,
+    execution.extra.assetTransferMethod,
+    execution.extra.deployment
+  );
+  const args = execution.functionName === "charge" ? chargeEscrowArgs(
+    tuple,
+    execution.settleAmount,
+    execution.tokenCollector,
+    unpackedSettle.collectorData,
+    execution.fee
+  ) : [
+    tuple,
+    execution.settleAmount,
+    execution.tokenCollector,
+    unpackedSettle.collectorData
+  ];
+  const settleTarget = resolveSettleTarget(execution.extra);
+  const customGasLimit = execution.extra.operatorType === "custom" ? config?.customOperatorAuthorizeGasLimit ?? DEFAULT_CUSTOM_OPERATOR_AUTHORIZE_GAS_LIMIT : void 0;
+  const written = await writeEscrowCall(
+    execution.submitter,
+    settleTarget,
+    execution.functionName,
+    args,
+    execution.extra.deployment,
+    {
+      gas: customGasLimit,
+      dataSuffix
+    }
+  );
+  if ("error" in written) {
+    return {
+      value: {
+        success: false,
+        errorReason: written.error,
+        transaction: "",
+        network: execution.network,
+        payer: execution.payer
+      },
+      disposition: "revert"
+    };
+  }
+  const value = await awaitCollectSettlement(
+    store,
+    pendingKey,
+    written.txHash,
+    execution,
+    customBalanceSnapshot,
+    false
+  );
+  return {
+    value,
+    disposition: value.errorReason === ErrTransactionReverted ? "revert" : "keep"
+  };
+}
+async function simulateCollect(signer, config, extra, paymentInfo, amount, tokenCollector, collectorData, fee, chainId, dataSuffix) {
+  const functionName = extra.paymentFlow === "authorization" ? "charge" : "authorize";
+  const tuple = paymentInfoToContractTuple(paymentInfo);
+  const args = functionName === "charge" ? chargeEscrowArgs(tuple, amount, tokenCollector, collectorData, fee) : [tuple, amount, tokenCollector, collectorData];
+  if (extra.operatorType === "delegated") {
+    const settleTarget = resolveSettleTarget(extra);
+    return simulateEscrowCall(
+      signer,
+      settleTarget,
+      functionName,
+      args,
+      extra.captureAuthorizer,
+      extra.deployment
+    );
+  }
+  if (!signer.simulateCalls) {
+    return ErrSimulationFailed;
+  }
+  const gasLimit = config?.customOperatorAuthorizeGasLimit ?? DEFAULT_CUSTOM_OPERATOR_AUTHORIZE_GAS_LIMIT;
+  const facilitator = signer.getAddresses()[0];
+  const paymentInfoHash = computePaymentInfoHash(chainId, paymentInfo, extra.deployment.escrow);
+  const operator = extra.captureAuthorizer;
+  const token = paymentInfo.token;
+  const payer = paymentInfo.payer;
+  const receiver = paymentInfo.receiver;
+  const feeReceiver = fee.feeReceiver;
+  const escrowAddress = extra.deployment.escrow;
+  let tokenStore;
+  try {
+    tokenStore = await signer.readContract({
+      address: escrowAddress,
+      abi: ESCROW_VIEW_ABI,
+      functionName: "getTokenStore",
+      args: [operator]
+    });
+  } catch {
+    return ErrSimulationFailed;
+  }
+  const balanceCall = (account) => ({
+    to: token,
+    abi: ERC20_BALANCE_OF_ABI,
+    functionName: "balanceOf",
+    args: [account]
+  });
+  const paymentStateCall = () => ({
+    to: escrowAddress,
+    abi: ESCROW_VIEW_ABI,
+    functionName: "paymentState",
+    args: [paymentInfoHash]
+  });
+  const preCalls = [
+    paymentStateCall(),
+    balanceCall(payer),
+    balanceCall(tokenStore),
+    balanceCall(facilitator),
+    ...functionName === "charge" ? [balanceCall(receiver), balanceCall(feeReceiver)] : []
+  ];
+  const forwardedData = appendDataSuffix(
+    (0, import_viem13.encodeFunctionData)({
+      abi: escrowAbiWithErrorsForDeployment(extra.deployment),
+      functionName,
+      args
+    }),
+    dataSuffix
+  );
+  const forwardedCall = {
+    to: operator,
+    data: forwardedData,
+    gas: gasLimit
+  };
+  const postCalls = [
+    paymentStateCall(),
+    balanceCall(payer),
+    balanceCall(tokenStore),
+    balanceCall(facilitator),
+    ...functionName === "charge" ? [balanceCall(receiver), balanceCall(feeReceiver)] : []
+  ];
+  const calls = [...preCalls, forwardedCall, ...postCalls];
+  const forwardedIndex = preCalls.length;
+  let results;
+  try {
+    ({ results } = await signer.simulateCalls({ account: facilitator, calls }));
+  } catch {
+    return ErrSimulationFailed;
+  }
+  if (results.length !== calls.length) {
+    return ErrSimulationFailed;
+  }
+  for (let i = 0; i < results.length; i++) {
+    if (i === forwardedIndex) continue;
+    if (results[i]?.status !== "success") {
+      return ErrSimulationFailed;
+    }
+  }
+  const forwarded = results[forwardedIndex];
+  if (!forwarded || forwarded.status !== "success") {
+    return ErrSimulationFailed;
+  }
+  if (forwarded.gasUsed !== void 0 && forwarded.gasUsed > gasLimit) {
+    return ErrSimulationFailed;
+  }
+  const eventOk = functionName === "charge" ? verifyPaymentChargedEvent(forwarded.logs, extra.deployment, {
+    paymentInfoHash,
+    amount,
+    tokenCollector,
+    operator,
+    fee
+  }) : verifyPaymentAuthorizedEvent(forwarded.logs, escrowAddress, {
+    paymentInfoHash,
+    amount,
+    tokenCollector,
+    operator
+  });
+  if (!eventOk) {
+    return ErrSimulationFailed;
+  }
+  const preState = normalizePaymentState(results[0]?.result);
+  const postState = normalizePaymentState(results[forwardedIndex + 1]?.result);
+  if (!preState || !postState || preState.hasCollectedPayment || preState.capturableAmount !== 0n || preState.refundableAmount !== 0n) {
+    return ErrSimulationFailed;
+  }
+  const readBalance = (index) => {
+    const result = results[index]?.result;
+    if (result === void 0 || result === null) return void 0;
+    return BigInt(result);
+  };
+  const prePayer = readBalance(1);
+  const preTokenStore = readBalance(2);
+  const preFacilitator = readBalance(3);
+  const postPayer = readBalance(forwardedIndex + 2);
+  const postTokenStore = readBalance(forwardedIndex + 3);
+  const postFacilitator = readBalance(forwardedIndex + 4);
+  if (prePayer === void 0 || preTokenStore === void 0 || preFacilitator === void 0 || postPayer === void 0 || postTokenStore === void 0 || postFacilitator === void 0) {
+    return ErrSimulationFailed;
+  }
+  const beforeBalances = {
+    payer: prePayer,
+    tokenStore: preTokenStore,
+    facilitator: preFacilitator
+  };
+  const afterBalances = {
+    payer: postPayer,
+    tokenStore: postTokenStore,
+    facilitator: postFacilitator
+  };
+  if (functionName === "authorize") {
+    if (!postState.hasCollectedPayment || postState.capturableAmount !== amount || postState.refundableAmount !== 0n || !hasExpectedCollectBalanceChanges(beforeBalances, afterBalances, functionName, amount, fee)) {
+      return ErrSimulationFailed;
+    }
+    return "ok";
+  }
+  const preReceiver = readBalance(4);
+  const preFeeReceiver = readBalance(5);
+  const postReceiver = readBalance(forwardedIndex + 5);
+  const postFeeReceiver = readBalance(forwardedIndex + 6);
+  if (preReceiver === void 0 || preFeeReceiver === void 0 || postReceiver === void 0 || postFeeReceiver === void 0) {
+    return ErrSimulationFailed;
+  }
+  beforeBalances.receiver = preReceiver;
+  beforeBalances.feeReceiver = preFeeReceiver;
+  afterBalances.receiver = postReceiver;
+  afterBalances.feeReceiver = postFeeReceiver;
+  if (!postState.hasCollectedPayment || postState.capturableAmount !== 0n || postState.refundableAmount !== amount || !hasExpectedCollectBalanceChanges(beforeBalances, afterBalances, functionName, amount, fee)) {
+    return ErrSimulationFailed;
+  }
+  return "ok";
+}
+async function readCollectBalanceSnapshot(signer, token, payer, tokenStore, facilitator, functionName, receiver, feeReceiver) {
+  const readBalance = async (account) => BigInt(
+    await signer.readContract({
+      address: token,
+      abi: ERC20_BALANCE_OF_ABI,
+      functionName: "balanceOf",
+      args: [account],
+      account: facilitator
+    })
+  );
+  try {
+    const common = await Promise.all([
+      readBalance(payer),
+      readBalance(tokenStore),
+      readBalance(facilitator)
+    ]);
+    if (functionName === "authorize") {
+      return { payer: common[0], tokenStore: common[1], facilitator: common[2] };
+    }
+    const [receiverBalance, feeReceiverBalance] = await Promise.all([
+      readBalance(receiver),
+      readBalance(feeReceiver)
+    ]);
+    return {
+      payer: common[0],
+      tokenStore: common[1],
+      facilitator: common[2],
+      receiver: receiverBalance,
+      feeReceiver: feeReceiverBalance
+    };
+  } catch {
+    return void 0;
+  }
+}
+function hasExpectedCollectBalanceChanges(before, after, functionName, amount, fee) {
+  if (after.facilitator < before.facilitator || after.payer !== before.payer - amount) {
+    return false;
+  }
+  if (functionName === "authorize") {
+    return after.tokenStore === before.tokenStore + amount;
+  }
+  if (before.receiver === void 0 || before.feeReceiver === void 0 || after.receiver === void 0 || after.feeReceiver === void 0) {
+    return false;
+  }
+  const feeAmount = submittedFeeAmount(fee, amount);
+  return after.tokenStore === before.tokenStore && after.receiver === before.receiver + (amount - feeAmount) && after.feeReceiver === before.feeReceiver + feeAmount;
+}
+function escrowEventLogs(logs, escrowAddress) {
+  return (logs ?? []).filter((log) => (0, import_viem13.isAddressEqual)(log.address, escrowAddress));
+}
+function verifyPaymentAuthorizedEvent(logs, escrowAddress, expected) {
+  const parsed = (0, import_viem13.parseEventLogs)({
+    abi: escrowEventsAbiForDeployment(AUTH_CAPTURE_DEPLOYMENT_V1_1),
+    eventName: "PaymentAuthorized",
+    logs: escrowEventLogs(logs, escrowAddress)
+  });
+  return parsed.some(
+    (event) => event.args.paymentInfoHash?.toLowerCase() === expected.paymentInfoHash.toLowerCase() && event.args.amount === expected.amount && (0, import_viem13.isAddressEqual)(event.args.tokenCollector, expected.tokenCollector) && (0, import_viem13.isAddressEqual)(event.args.paymentInfo.operator, expected.operator)
+  );
+}
+function verifyPaymentChargedEvent(logs, deployment, expected) {
+  const parsed = (0, import_viem13.parseEventLogs)({
+    abi: escrowEventsAbiForDeployment(deployment),
+    eventName: "PaymentCharged",
+    logs: escrowEventLogs(logs, deployment.escrow)
+  });
+  return parsed.some((event) => {
+    const eventArgs = event.args;
+    const feeMatches = expected.fee.version === "v1.0" ? eventArgs.feeBps === expected.fee.feeBps : eventArgs.feeAmount === BigInt(expected.fee.feeAmount);
+    return eventArgs.paymentInfoHash?.toLowerCase() === expected.paymentInfoHash.toLowerCase() && eventArgs.amount === expected.amount && eventArgs.tokenCollector !== void 0 && (0, import_viem13.isAddressEqual)(eventArgs.tokenCollector, expected.tokenCollector) && eventArgs.paymentInfo?.operator !== void 0 && (0, import_viem13.isAddressEqual)(eventArgs.paymentInfo.operator, expected.operator) && feeMatches && eventArgs.feeReceiver !== void 0 && (0, import_viem13.isAddressEqual)(eventArgs.feeReceiver, expected.fee.feeReceiver);
+  });
+}
+
+// src/auth-capture/facilitator/lifecycle.ts
+var import_viem14 = require("viem");
+async function verifyLifecycle(signers, config, payload, requirements, wirePayload, context) {
+  if (wirePayload.type === "capture" && !isCapturePayload(wirePayload)) {
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat };
+  }
+  if (wirePayload.type === "void") {
+    if (!isVoidPayload(wirePayload)) {
+      if (typeof wirePayload === "object" && wirePayload !== null && "voidAuthorizerSignature" in wirePayload && wirePayload.voidAuthorizerSignature !== void 0) {
+        return { isValid: false, invalidReason: ErrVoidAuthorizerSignature };
+      }
+      return { isValid: false, invalidReason: ErrInvalidPayloadFormat };
+    }
+  }
+  if (wirePayload.type === "refund") {
+    if (!isRefundPayload(wirePayload)) {
+      if (typeof wirePayload === "object" && wirePayload !== null && "voidAuthorizerSignature" in wirePayload && wirePayload.voidAuthorizerSignature !== void 0) {
+        return { isValid: false, invalidReason: ErrVoidAuthorizerSignature };
+      }
+      return { isValid: false, invalidReason: ErrInvalidPayloadFormat };
+    }
+  }
+  const common = verifyCommon(
+    payload.accepted.scheme,
+    payload.accepted.network,
+    requirements,
+    AUTH_CAPTURE_SCHEME,
+    facilitatorAddresses(signers),
+    config,
+    true
+  );
+  if ("error" in common) {
+    return { isValid: false, invalidReason: common.error };
+  }
+  const extra = common.extra;
+  const submitter = resolveSubmitter(signers, extra);
+  if (!submitter) {
+    return { isValid: false, invalidReason: ErrOperatorNotAdmitted };
+  }
+  if ((wirePayload.type === "capture" || wirePayload.type === "void") && extra.paymentFlow !== "escrow") {
+    return { isValid: false, invalidReason: ErrInvalidPayloadType };
+  }
+  if (wirePayload.type === "refund" && extra.operatorType === "delegated" && !config?.refundFunding) {
+    return { isValid: false, invalidReason: ErrRefundFundingUnavailable };
+  }
+  const paymentInfo = wirePayload.paymentInfo;
+  if (!(0, import_viem14.isAddressEqual)(paymentInfo.operator, extra.captureAuthorizer)) {
+    return { isValid: false, invalidReason: ErrOperatorMismatch };
+  }
+  const expectedSalt = deriveBoundSalt(
+    extra.receiverAuthorizer,
+    extra.policy,
+    wirePayload.saltNonce
+  );
+  if (BigInt(paymentInfo.salt) !== BigInt(expectedSalt)) {
+    return { isValid: false, invalidReason: ErrSaltBindingMismatch };
+  }
+  if (!paymentInfoMatchesRequirements(paymentInfo, payload.accepted, extra)) {
+    return { isValid: false, invalidReason: ErrPaymentInfoMismatch };
+  }
+  const chainId = getEvmChainId(requirements.network);
+  const paymentInfoHash = computePaymentInfoHash(chainId, paymentInfo, extra.deployment.escrow);
+  const now = Math.floor(Date.now() / 1e3);
+  const delegated = getDelegatedAuthorizer(config, extra.receiverAuthorizer);
+  const signed = hasAuthorizerSignature(wirePayload) ? { payload: wirePayload } : delegated ? await signDelegatedLifecycle({
+    delegated,
+    extra,
+    chainId,
+    paymentInfoHash,
+    payload,
+    requirements,
+    wirePayload,
+    context
+  }) : { failure: { reason: ErrAuthorizerSignature } };
+  if ("failure" in signed) {
+    return {
+      isValid: false,
+      invalidReason: signed.failure.reason,
+      invalidMessage: signed.failure.message
+    };
+  }
+  const signedPayload = signed.payload;
+  if (signedPayload.type === "capture") {
+    return verifyCapturePayload(
+      submitter,
+      extra,
+      chainId,
+      paymentInfo,
+      paymentInfoHash,
+      signedPayload,
+      now
+    );
+  }
+  if (signedPayload.type === "void") {
+    return verifyVoidPayload(
+      submitter,
+      extra,
+      chainId,
+      paymentInfo,
+      paymentInfoHash,
+      signedPayload
+    );
+  }
+  return verifyRefundPayload(
+    submitter,
+    extra,
+    chainId,
+    paymentInfo,
+    paymentInfoHash,
+    signedPayload,
+    now
+  );
+}
+function hasAuthorizerSignature(wirePayload) {
+  return Boolean(wirePayload.authorizerSignature);
+}
+async function signDelegatedLifecycle(args) {
+  const { delegated, extra, chainId, paymentInfoHash, wirePayload } = args;
+  const network = args.requirements.network;
+  const identity = await resolveDelegatedCallerIdentity(delegated, {
+    step: wirePayload.type,
+    paymentInfoHash,
+    network,
+    payer: wirePayload.paymentInfo.payer,
+    payload: args.payload,
+    requirements: args.requirements,
+    facilitatorContext: args.context
+  });
+  if (!identity) {
+    return { failure: { reason: ErrUnauthenticatedAuthorizerRequest } };
+  }
+  try {
+    const binding = await delegated.storage.get(network, paymentInfoHash);
+    const bound = binding !== void 0 && binding.expiresAt > Math.floor(Date.now() / 1e3) && binding.callerIdentity === identity;
+    if (!bound) {
+      return { failure: { reason: ErrUnauthenticatedAuthorizerRequest } };
+    }
+  } catch (error) {
+    return {
+      failure: {
+        reason: ErrDelegatedAuthUnavailable,
+        message: `failed to read delegated auth binding: ${error instanceof Error ? error.message : String(error)}`
+      }
+    };
+  }
+  const domainArgs = [delegated.signer, chainId, extra.captureAuthorizer];
+  switch (wirePayload.type) {
+    case "void": {
+      const authorizerSignature = await signVoid(...domainArgs, paymentInfoHash);
+      return { payload: { ...wirePayload, authorizerSignature } };
+    }
+    case "refund": {
+      const authorizerSignature = await signRefund(...domainArgs, {
+        paymentInfoHash,
+        amount: wirePayload.amount,
+        tokenCollector: extra.deployment.operatorRefundCollector,
+        expectedCapturableAmount: wirePayload.expectedCapturableAmount,
+        expectedRefundableAmount: wirePayload.expectedRefundableAmount
+      });
+      return { payload: { ...wirePayload, authorizerSignature } };
+    }
+    case "capture": {
+      const captureFee = captureFeeFromPayload(extra, wirePayload);
+      if (!captureFee) {
+        return { failure: { reason: ErrInvalidPayloadFormat } };
+      }
+      const authorizerSignature = await signCapture(
+        ...domainArgs,
+        extra.deployment,
+        captureDigestFor(captureFee, paymentInfoHash, wirePayload)
+      );
+      const { voidRemainder, ...capture } = wirePayload;
+      return {
+        payload: {
+          ...capture,
+          authorizerSignature,
+          ...voidRemainder ? { voidAuthorizerSignature: await signVoid(...domainArgs, paymentInfoHash) } : {}
+        }
+      };
+    }
+    default: {
+      const exhaustive = wirePayload;
+      throw new Error(`unexpected lifecycle payload ${String(exhaustive)}`);
+    }
+  }
+}
+function captureDigestFor(captureFee, paymentInfoHash, wirePayload) {
+  const base = {
+    paymentInfoHash,
+    amount: wirePayload.amount,
+    feeReceiver: captureFee.feeReceiver,
+    expectedCapturableAmount: wirePayload.expectedCapturableAmount,
+    expectedRefundableAmount: wirePayload.expectedRefundableAmount
+  };
+  return captureFee.version === "v1.0" ? { ...base, feeBps: captureFee.feeBps } : { ...base, feeAmount: captureFee.feeAmount };
+}
+async function awaitLifecycleSettlement(store, pendingKey, submitter, tx, network, payer, amount) {
+  return withPendingSettlementStore(
+    store,
+    pendingKey,
+    () => waitAndReturnSettleResponse(submitter, tx, network, payer, {
+      failedStatusReason: ErrTransactionReverted,
+      amount
+    }),
+    ErrTransactionReverted
+  );
+}
+async function settleLifecycle(signers, config, payload, requirements, wirePayload, store, context) {
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  const extra = "extra" in parsed ? parsed.extra : void 0;
+  const delegated = extra ? getDelegatedAuthorizer(config, extra.receiverAuthorizer) : void 0;
+  let settleable = wirePayload;
+  if (!hasAuthorizerSignature(wirePayload) && extra && delegated) {
+    const chainId = getEvmChainId(requirements.network);
+    const signed = await signDelegatedLifecycle({
+      delegated,
+      extra,
+      chainId,
+      paymentInfoHash: computePaymentInfoHash(
+        chainId,
+        wirePayload.paymentInfo,
+        extra.deployment.escrow
+      ),
+      payload,
+      requirements,
+      wirePayload,
+      context
+    });
+    if ("failure" in signed) {
+      return {
+        success: false,
+        errorReason: signed.failure.reason,
+        errorMessage: signed.failure.message,
+        transaction: "",
+        network: requirements.network,
+        payer: wirePayload.paymentInfo.payer
+      };
+    }
+    settleable = signed.payload;
+  }
+  const result = await settleVerifiedLifecycle(
+    signers,
+    config,
+    payload,
+    requirements,
+    settleable,
+    store,
+    context
+  );
+  if (result.success && extra && delegated && hasAuthorizerSignature(settleable)) {
+    await releaseTerminalBinding(signers, delegated, extra, requirements, settleable);
+  }
+  return result;
+}
+async function releaseTerminalBinding(signers, delegated, extra, requirements, settled) {
+  const chainId = getEvmChainId(requirements.network);
+  const paymentInfoHash = computePaymentInfoHash(
+    chainId,
+    settled.paymentInfo,
+    extra.deployment.escrow
+  );
+  let remaining;
+  if (settled.type === "refund") {
+    remaining = {
+      capturableAmount: BigInt(settled.expectedCapturableAmount),
+      refundableAmount: BigInt(settled.expectedRefundableAmount) - BigInt(settled.amount)
+    };
+  } else if (settled.type === "capture" && !settled.voidAuthorizerSignature) {
+    remaining = {
+      capturableAmount: BigInt(settled.expectedCapturableAmount) - BigInt(settled.amount),
+      refundableAmount: BigInt(settled.expectedRefundableAmount) + BigInt(settled.amount)
+    };
+  } else {
+    const submitter = resolveSubmitter(signers, extra);
+    remaining = submitter && await readPaymentStateOnce(submitter, paymentInfoHash, extra.deployment.escrow);
+  }
+  if (!remaining || remaining.capturableAmount !== 0n || remaining.refundableAmount !== 0n) {
+    return;
+  }
+  try {
+    await delegated.storage.delete(requirements.network, paymentInfoHash);
+  } catch (error) {
+    reportDelegatedStorageError(delegated, error, requirements.network, paymentInfoHash);
+  }
+}
+function lifecyclePendingKey(config, requirements, wirePayload) {
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  if ("error" in parsed || !getDelegatedAuthorizer(config, parsed.extra.receiverAuthorizer)) {
+    return wirePayload.authorizerSignature;
+  }
+  const paymentInfoHash = computePaymentInfoHash(
+    getEvmChainId(requirements.network),
+    wirePayload.paymentInfo,
+    parsed.extra.deployment.escrow
+  );
+  const balances = wirePayload.type === "void" ? ["", "", ""] : [
+    wirePayload.amount,
+    wirePayload.expectedCapturableAmount,
+    wirePayload.expectedRefundableAmount
+  ];
+  return [requirements.network, paymentInfoHash.toLowerCase(), wirePayload.type, ...balances].join(
+    "|"
+  );
+}
+async function settleVerifiedLifecycle(signers, config, payload, requirements, wirePayload, store, context) {
+  const pendingKey = lifecyclePendingKey(config, requirements, wirePayload);
+  const payer = wirePayload.paymentInfo.payer;
+  if (pendingKey) {
+    const cachedTx = await store.get(pendingKey);
+    if (cachedTx) {
+      const parsed2 = parseAuthCaptureExtra(requirements.extra);
+      if ("error" in parsed2) {
+        return {
+          success: false,
+          errorReason: ErrSettlementPending,
+          transaction: cachedTx,
+          network: requirements.network,
+          payer
+        };
+      }
+      const submitter2 = resolveSubmitter(signers, parsed2.extra);
+      if (!submitter2) {
+        return {
+          success: false,
+          errorReason: ErrSettlementPending,
+          transaction: cachedTx,
+          network: requirements.network,
+          payer
+        };
+      }
+      await store.delete(pendingKey);
+      const amount2 = wirePayload.type === "refund" || wirePayload.type === "capture" ? wirePayload.amount : "0";
+      const result2 = await awaitLifecycleSettlement(
+        store,
+        pendingKey,
+        submitter2,
+        cachedTx,
+        requirements.network,
+        payer,
+        amount2
+      );
+      if (result2.success && wirePayload.type === "capture" && wirePayload.voidAuthorizerSignature) {
+        const tuple2 = paymentInfoToContractTuple(wirePayload.paymentInfo);
+        const settleTarget2 = resolveSettleTarget(parsed2.extra);
+        const dataSuffix2 = await resolveDataSuffix(context, {
+          paymentPayload: payload,
+          paymentRequirements: requirements
+        });
+        await submitEscrowCall(submitter2, settleTarget2, "void", [tuple2], parsed2.extra.deployment, {
+          dataSuffix: dataSuffix2
+        });
+      }
+      return result2;
+    }
+  }
+  const verification = await verifyLifecycle(
+    signers,
+    config,
+    payload,
+    requirements,
+    wirePayload,
+    context
+  );
+  if (!verification.isValid) {
+    return {
+      success: false,
+      errorReason: verification.invalidReason ?? ErrVerificationFailed,
+      errorMessage: verification.invalidMessage,
+      transaction: "",
+      network: requirements.network,
+      payer: verification.payer ?? wirePayload.paymentInfo.payer
+    };
+  }
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  if ("error" in parsed) {
+    return {
+      success: false,
+      errorReason: parsed.error,
+      transaction: "",
+      network: requirements.network,
+      payer: wirePayload.paymentInfo.payer
+    };
+  }
+  const extra = parsed.extra;
+  const submitter = resolveSubmitter(signers, extra);
+  if (!submitter) {
+    return {
+      success: false,
+      errorReason: ErrOperatorNotAdmitted,
+      transaction: "",
+      network: requirements.network,
+      payer: wirePayload.paymentInfo.payer
+    };
+  }
+  const tuple = paymentInfoToContractTuple(wirePayload.paymentInfo);
+  const settleTarget = resolveSettleTarget(extra);
+  const dataSuffix = await resolveDataSuffix(context, {
+    paymentPayload: payload,
+    paymentRequirements: requirements
+  });
+  if (wirePayload.type === "void") {
+    const written2 = await writeEscrowCall(
+      submitter,
+      settleTarget,
+      "void",
+      [tuple],
+      extra.deployment,
+      {
+        dataSuffix
+      }
+    );
+    if ("error" in written2) {
+      return {
+        success: false,
+        errorReason: written2.error,
+        transaction: "",
+        network: requirements.network,
+        payer
+      };
+    }
+    return awaitLifecycleSettlement(
+      store,
+      pendingKey,
+      submitter,
+      written2.txHash,
+      requirements.network,
+      payer,
+      "0"
+    );
+  }
+  if (wirePayload.type === "refund") {
+    const amount2 = BigInt(wirePayload.amount);
+    const written2 = await writeEscrowCall(
+      submitter,
+      settleTarget,
+      "refund",
+      [tuple, amount2, extra.deployment.operatorRefundCollector, "0x"],
+      extra.deployment,
+      { dataSuffix }
+    );
+    if ("error" in written2) {
+      return {
+        success: false,
+        errorReason: written2.error,
+        transaction: "",
+        network: requirements.network,
+        payer
+      };
+    }
+    return awaitLifecycleSettlement(
+      store,
+      pendingKey,
+      submitter,
+      written2.txHash,
+      requirements.network,
+      payer,
+      amount2.toString()
+    );
+  }
+  const capture = wirePayload;
+  const amount = BigInt(capture.amount);
+  const captureFee = captureFeeFromPayload(extra, capture);
+  if (!captureFee) {
+    return {
+      success: false,
+      errorReason: ErrInvalidPayloadFormat,
+      transaction: "",
+      network: requirements.network,
+      payer,
+      amount: amount.toString()
+    };
+  }
+  const written = await writeEscrowCall(
+    submitter,
+    settleTarget,
+    "capture",
+    captureEscrowArgs(tuple, amount, captureFee),
+    extra.deployment,
+    { dataSuffix }
+  );
+  if ("error" in written) {
+    return {
+      success: false,
+      errorReason: written.error,
+      transaction: "",
+      network: requirements.network,
+      payer,
+      amount: amount.toString()
+    };
+  }
+  const result = await awaitLifecycleSettlement(
+    store,
+    pendingKey,
+    submitter,
+    written.txHash,
+    requirements.network,
+    payer,
+    amount.toString()
+  );
+  if (!result.success) {
+    return result;
+  }
+  if (capture.voidAuthorizerSignature) {
+    await submitEscrowCall(submitter, settleTarget, "void", [tuple], extra.deployment, {
+      dataSuffix
+    });
+  }
+  return result;
+}
+function paymentInfoMatchesRequirements(paymentInfo, requirements, extra) {
+  return paymentInfo.receiver.toLowerCase() === requirements.payTo.toLowerCase() && paymentInfo.token.toLowerCase() === requirements.asset.toLowerCase() && paymentInfo.maxAmount === requirements.amount && paymentInfo.authorizationExpiry === extra.captureDeadline && paymentInfo.refundExpiry === extra.refundDeadline && paymentInfo.minFeeBps === extra.minFeeBps && paymentInfo.maxFeeBps === extra.maxFeeBps && (0, import_viem14.isAddressEqual)(paymentInfo.feeReceiver, extra.feeRecipient);
+}
+function balancesMatch(state, expectedCapturable, expectedRefundable) {
+  return state.capturableAmount === expectedCapturable && state.refundableAmount === expectedRefundable;
+}
+async function verifyCapturePayload(signer, extra, chainId, paymentInfo, paymentInfoHash, wirePayload, now) {
+  const payer = paymentInfo.payer;
+  const captureFee = captureFeeFromPayload(extra, wirePayload);
+  if (!captureFee) {
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat, payer };
+  }
+  const ok = await verifyCapture(
+    signer,
+    extra.receiverAuthorizer,
+    chainId,
+    extra.captureAuthorizer,
+    extra.deployment,
+    captureDigestFor(captureFee, paymentInfoHash, wirePayload),
+    wirePayload.authorizerSignature
+  );
+  if (!ok) {
+    return { isValid: false, invalidReason: ErrAuthorizerSignature, payer };
+  }
+  if (wirePayload.voidAuthorizerSignature) {
+    const voidOk = await verifyVoid(
+      signer,
+      extra.receiverAuthorizer,
+      chainId,
+      extra.captureAuthorizer,
+      paymentInfoHash,
+      wirePayload.voidAuthorizerSignature
+    );
+    if (!voidOk) {
+      return { isValid: false, invalidReason: ErrVoidAuthorizerSignature, payer };
+    }
+  }
+  const feeError = validateSubmittedFee(extra, wirePayload.amount, captureFee);
+  if (feeError) {
+    return { isValid: false, invalidReason: feeError, payer };
+  }
+  if (now >= paymentInfo.authorizationExpiry) {
+    return { isValid: false, invalidReason: ErrCaptureDeadlineExpired, payer };
+  }
+  const expectedCapturable = BigInt(wirePayload.expectedCapturableAmount);
+  const expectedRefundable = BigInt(wirePayload.expectedRefundableAmount);
+  const { state } = await readPaymentStateForBalances(
+    signer,
+    paymentInfoHash,
+    expectedCapturable,
+    expectedRefundable,
+    extra.deployment.escrow
+  );
+  if (!state) {
+    return { isValid: false, invalidReason: ErrUnexpectedPaymentState, payer };
+  }
+  if (!balancesMatch(state, expectedCapturable, expectedRefundable)) {
+    return { isValid: false, invalidReason: ErrUnexpectedPaymentState, payer };
+  }
+  const amount = BigInt(wirePayload.amount);
+  if (amount <= 0n || amount > state.capturableAmount) {
+    return { isValid: false, invalidReason: ErrAmountMismatch, payer };
+  }
+  if (wirePayload.voidAuthorizerSignature) {
+    if (amount >= state.capturableAmount) {
+      return { isValid: false, invalidReason: ErrVoidRemainderFullCapture, payer };
+    }
+  }
+  const tuple = paymentInfoToContractTuple(paymentInfo);
+  const captureSim = await simulateEscrowCall(
+    signer,
+    resolveSettleTarget(extra),
+    "capture",
+    captureEscrowArgs(tuple, amount, captureFee),
+    extra.captureAuthorizer,
+    extra.deployment
+  );
+  if (captureSim !== "ok") {
+    return { isValid: false, invalidReason: captureSim, payer };
+  }
+  if (wirePayload.voidAuthorizerSignature) {
+    const voidSim = await simulateEscrowCall(
+      signer,
+      resolveSettleTarget(extra),
+      "void",
+      [tuple],
+      extra.captureAuthorizer,
+      extra.deployment
+    );
+    if (voidSim !== "ok") {
+      return { isValid: false, invalidReason: voidSim, payer };
+    }
+  }
+  return { isValid: true, payer };
+}
+async function verifyVoidPayload(signer, extra, chainId, paymentInfo, paymentInfoHash, wirePayload) {
+  const payer = paymentInfo.payer;
+  const ok = await verifyVoid(
+    signer,
+    extra.receiverAuthorizer,
+    chainId,
+    extra.captureAuthorizer,
+    paymentInfoHash,
+    wirePayload.authorizerSignature
+  );
+  if (!ok) {
+    return { isValid: false, invalidReason: ErrAuthorizerSignature, payer };
+  }
+  const state = await readPaymentStateOnce(signer, paymentInfoHash, extra.deployment.escrow);
+  if (!state) {
+    return { isValid: false, invalidReason: ErrUnexpectedPaymentState, payer };
+  }
+  if (state.capturableAmount === 0n) {
+    return { isValid: false, invalidReason: ErrZeroAuthorization, payer };
+  }
+  const tuple = paymentInfoToContractTuple(paymentInfo);
+  const sim = await simulateEscrowCall(
+    signer,
+    resolveSettleTarget(extra),
+    "void",
+    [tuple],
+    extra.captureAuthorizer,
+    extra.deployment
+  );
+  if (sim !== "ok") {
+    return { isValid: false, invalidReason: sim, payer };
+  }
+  return { isValid: true, payer };
+}
+async function verifyRefundPayload(signer, extra, chainId, paymentInfo, paymentInfoHash, wirePayload, now) {
+  const payer = paymentInfo.payer;
+  const ok = await verifyRefund(
+    signer,
+    extra.receiverAuthorizer,
+    chainId,
+    extra.captureAuthorizer,
+    {
+      paymentInfoHash,
+      amount: wirePayload.amount,
+      tokenCollector: extra.deployment.operatorRefundCollector,
+      expectedCapturableAmount: wirePayload.expectedCapturableAmount,
+      expectedRefundableAmount: wirePayload.expectedRefundableAmount
+    },
+    wirePayload.authorizerSignature
+  );
+  if (!ok) {
+    return { isValid: false, invalidReason: ErrAuthorizerSignature, payer };
+  }
+  if (now >= paymentInfo.refundExpiry) {
+    return { isValid: false, invalidReason: ErrRefundDeadlineExpired, payer };
+  }
+  const expectedCapturable = BigInt(wirePayload.expectedCapturableAmount);
+  const expectedRefundable = BigInt(wirePayload.expectedRefundableAmount);
+  const { state } = await readPaymentStateForBalances(
+    signer,
+    paymentInfoHash,
+    expectedCapturable,
+    expectedRefundable,
+    extra.deployment.escrow
+  );
+  if (!state) {
+    return { isValid: false, invalidReason: ErrUnexpectedPaymentState, payer };
+  }
+  if (!balancesMatch(state, expectedCapturable, expectedRefundable)) {
+    return { isValid: false, invalidReason: ErrUnexpectedPaymentState, payer };
+  }
+  const amount = BigInt(wirePayload.amount);
+  if (amount <= 0n || amount > state.refundableAmount) {
+    return { isValid: false, invalidReason: ErrRefundExceedsCapture, payer };
+  }
+  const tuple = paymentInfoToContractTuple(paymentInfo);
+  const sim = await simulateEscrowCall(
+    signer,
+    resolveSettleTarget(extra),
+    "refund",
+    [tuple, amount, extra.deployment.operatorRefundCollector, "0x"],
+    extra.captureAuthorizer,
+    extra.deployment
+  );
+  if (sim !== "ok") {
+    return { isValid: false, invalidReason: sim, payer };
+  }
+  return { isValid: true, payer };
+}
+
+// src/auth-capture/facilitator/scheme.ts
+function assertDelegatedReceiverAuthorizerConfig(config) {
+  if (!config) return;
+  const hasAuthorizerSigner = config.authorizerSigner !== void 0;
+  const hasResolveCallerIdentity = config.resolveCallerIdentity !== void 0;
+  const delegatedAuthStorage = config.delegatedAuthStorage;
+  const hasDelegatedAuthStorage = delegatedAuthStorage !== void 0;
+  const hasOnStorageError = config.onStorageError !== void 0;
+  const anyDelegation = hasAuthorizerSigner || hasResolveCallerIdentity || hasDelegatedAuthStorage || hasOnStorageError;
+  if (!anyDelegation) return;
+  if (!hasAuthorizerSigner) {
+    throw new Error("facilitator-delegated receiver authorization requires authorizerSigner");
+  }
+  if (!hasResolveCallerIdentity) {
+    throw new Error("authorizerSigner requires resolveCallerIdentity");
+  }
+  if (delegatedAuthStorage === void 0) {
+    throw new Error("authorizerSigner requires delegatedAuthStorage");
+  }
+  assertDelegatedAuthStorage(delegatedAuthStorage);
+  if (!hasOnStorageError) {
+    throw new Error("authorizerSigner requires onStorageError");
+  }
+}
+var AuthCaptureEvmScheme = class {
+  /**
+   * Construct a facilitator-side auth-capture scheme bound to one or more signers.
+   * Pass an array of single-address `toFacilitatorEvmSigner` results to rotate
+   * submitters — do not register the scheme twice on the same network.
+   *
+   * @param signer - Facilitator signer, or a set of signers to rotate across.
+   * @param config - Optional fee terms, operator allowlist, delegated refund funding, and
+   *                 the facilitator-delegated receiver authorizer.
+   * @throws If facilitator-delegated receiver authorization is only partially configured, or
+   *         `captureAuthorizers` names an address no signer holds.
+   */
+  constructor(signer, config) {
+    this.scheme = AUTH_CAPTURE_SCHEME;
+    this.caipFamily = "eip155:*";
+    assertDelegatedReceiverAuthorizerConfig(config);
+    this.signers = Array.isArray(signer) ? [...signer] : [signer];
+    this.pendingStore = config?.pendingSettlementStore ?? new import_facilitator.InMemoryPendingSettlementStore();
+    this.config = config;
+    this.captureAuthorizers = resolveCaptureAuthorizerPool(this.signers, config);
+  }
+  /**
+   * Return the flattened, deduped addresses this facilitator submits from.
+   *
+   * @param _ - Unused network argument (interface compatibility).
+   * @returns The facilitator's submitter address(es) on this network.
+   */
+  getSigners(_) {
+    return [...facilitatorAddresses(this.signers)];
+  }
+  /**
+   * Facilitator-injected `extra` fields for `/supported`: a `captureAuthorizer` picked from
+   * the pool (randomly, or by `selectCaptureAuthorizer`), the receiver authorizer when this
+   * facilitator can authenticate delegated requests, grouped fee terms, and the
+   * custom-operator allowlist.
+   *
+   * @param network - CAIP-2 network being advertised.
+   * @returns Extra to merge into payment requirements, or undefined when empty.
+   */
+  getExtra(network) {
+    const extra = {};
+    const captureAuthorizer = pickCaptureAuthorizer(
+      this.captureAuthorizers,
+      network,
+      this.config?.selectCaptureAuthorizer
+    );
+    if (captureAuthorizer) {
+      extra.captureAuthorizer = captureAuthorizer;
+    }
+    if (this.config?.authorizerSigner) {
+      extra.receiverAuthorizer = (0, import_viem15.getAddress)(this.config.authorizerSigner.address);
+    }
+    if (this.config?.feeTerms) {
+      extra.feeRecipient = this.config.feeTerms.feeRecipient;
+      extra.minFeeBps = this.config.feeTerms.minFeeBps;
+      extra.maxFeeBps = this.config.feeTerms.maxFeeBps;
+    }
+    if (this.config?.operators && this.config.operators.length > 0 && this.signers.length > 0 && this.signers.every((member) => member.simulateCalls)) {
+      extra.operators = this.config.operators;
+    }
+    return Object.keys(extra).length > 0 ? extra : void 0;
+  }
+  /**
+   * Verify a payment payload against the published requirements without
+   * touching state.
+   *
+   * @param payload - The wire payload from the payer or resource server.
+   * @param requirements - The server's published payment requirements.
+   * @param context - Optional facilitator context for extension hooks.
+   * @returns A `VerifyResponse` with `isValid` and, on failure, a stable `invalidReason`.
+   */
+  async verify(payload, requirements, context) {
+    const raw = payload.payload;
+    if (isLifecyclePayload(raw)) {
+      return verifyLifecycle(this.signers, this.config, payload, requirements, raw, context);
+    }
+    if (isAuthCaptureCollectPayload(raw)) {
+      const dataSuffix = await resolveDataSuffix(context, {
+        paymentPayload: payload,
+        paymentRequirements: requirements
+      });
+      return verifyCollect(this.signers, this.config, payload, requirements, raw, dataSuffix);
+    }
+    if (typeof raw === "object" && raw !== null && "type" in raw) {
+      return { isValid: false, invalidReason: ErrInvalidPayloadType };
+    }
+    return { isValid: false, invalidReason: ErrInvalidPayloadFormat };
+  }
+  /**
+   * Verify-then-settle. Re-runs `verify()` against the payload, then submits
+   * the collect or lifecycle call.
+   *
+   * @param payload - The wire payload from the payer or resource server.
+   * @param requirements - The server's published payment requirements.
+   * @param context - Optional facilitator context for extension hooks (e.g.
+   *                  builder-code calldata suffixes).
+   * @returns A `SettleResponse` with `success`, the transaction hash (on
+   *          success), and a stable `errorReason` (on failure).
+   */
+  async settle(payload, requirements, context) {
+    const raw = payload.payload;
+    if (isLifecyclePayload(raw)) {
+      return settleLifecycle(
+        this.signers,
+        this.config,
+        payload,
+        requirements,
+        raw,
+        this.pendingStore,
+        context
+      );
+    }
+    if (isAuthCaptureCollectPayload(raw)) {
+      return settleCollect(
+        this.signers,
+        this.config,
+        payload,
+        requirements,
+        raw,
+        this.pendingStore,
+        context
+      );
+    }
+    return {
+      success: false,
+      errorReason: typeof raw === "object" && raw !== null && "type" in raw ? ErrInvalidPayloadType : ErrInvalidPayloadFormat,
+      transaction: "",
+      network: requirements.network
+    };
+  }
+};
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  AuthCaptureCallerIdentityConflictError,
+  AuthCaptureEvmScheme,
+  InMemoryAuthCaptureDelegatedAuthStorage,
+  facilitatorAddresses,
+  selectSubmitter
+});
+//# sourceMappingURL=index.js.map

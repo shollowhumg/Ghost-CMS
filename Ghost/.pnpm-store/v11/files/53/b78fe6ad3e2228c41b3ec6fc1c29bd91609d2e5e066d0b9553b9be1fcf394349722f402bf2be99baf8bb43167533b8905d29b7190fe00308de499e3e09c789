@@ -1,0 +1,55 @@
+import type { PublicKeyJwk } from '../manifest/keys.ts';
+import { type PrivateKey } from './keys.ts';
+import type { VerifyResult } from './signed-manifest.ts';
+/** Where on an origin Ghost posts a challenge. */
+export declare const CHALLENGE_PATH = "/.well-known/ghost-app/challenge";
+/** What a challenge is for, signed with it, so its answer can't pass for any other signature. */
+export declare const CHALLENGE_PURPOSE = "ghost-app-challenge";
+/**
+ * What Ghost posts to an origin, as JSON. The backend signs the exact bytes it received,
+ * so neither side has to agree on how JSON is written.
+ */
+export interface Challenge {
+    purpose: typeof CHALLENGE_PURPOSE;
+    /** The origin being challenged, so an answer can't be relayed from another origin. */
+    origin: string;
+    /** 32 random bytes in base64url, so no answer can be reused. */
+    nonce: string;
+}
+/** What a backend answers a challenge with, as JSON. */
+export interface ChallengeAnswer {
+    /** A compact JWS whose payload is the challenge's exact bytes, signed with the backend key. */
+    signature: string;
+}
+/** The URL to post a challenge for an origin to. */
+export declare function challengeUrl(origin: string): string;
+/** A fresh challenge for an origin, as the exact text to post and to verify the answer with. */
+export declare function createChallenge(origin: string): string;
+export type AnswerChallengeResult = {
+    success: true;
+    answer: ChallengeAnswer;
+} | {
+    success: false;
+    error: string;
+};
+/**
+ * Answers a challenge a backend received, signing it with the backend key. `requestUrl` is
+ * the URL the request arrived at, as the platform reports it (`request.url` on Workers):
+ * never one built from `X-Forwarded-Host` or any other header the sender controls. A
+ * challenge for any origin but that one is refused, so whoever takes over a name the app
+ * used to serve can't relay Ghost's challenge to the real backend to prove it.
+ *
+ * Ghost can't see this check, so it only helps where the platform routes requests by host,
+ * as Workers, Vercel, Netlify and Fly do. A server that answers for any host gains nothing.
+ */
+export declare function answerChallenge(body: string, { backendKey, requestUrl }: {
+    backendKey: PrivateKey;
+    requestUrl: string | URL;
+}): Promise<AnswerChallengeResult>;
+/**
+ * Checks an origin's answer to a challenge: a signature with the backend key over the
+ * exact text Ghost posted, under a protected header of only `alg`. The error only says how
+ * the answer fell short.
+ */
+export declare function verifyChallengeAnswer(challenge: string, answer: string, backendKey: PublicKeyJwk): Promise<VerifyResult>;
+//# sourceMappingURL=challenge.d.ts.map

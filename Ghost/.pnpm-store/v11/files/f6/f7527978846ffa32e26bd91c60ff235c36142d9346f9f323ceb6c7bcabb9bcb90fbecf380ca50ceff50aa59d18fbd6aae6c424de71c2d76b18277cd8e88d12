@@ -1,0 +1,37 @@
+function pageUrl(manifest) {
+    const page = manifest.surfaces.find((surface) => surface.type === 'admin_page') ?? manifest.surfaces[0];
+    if (!page) {
+        // Parsing rejects manifests without surfaces, so this only happens on a bug.
+        // It's a plain Error because this entry point can't have dependencies.
+        // oxlint-disable-next-line ghost/ghost-custom/no-native-error
+        throw new Error('The manifest has no surfaces');
+    }
+    return new URL(page.url);
+}
+export function appPageUrl(manifest) {
+    return pageUrl(manifest).href;
+}
+/**
+ * The host the app's page loads from, like `podcast.example.com`.
+ * This is where the app runs. It can differ from where the manifest is hosted.
+ */
+export function servedFrom(manifest) {
+    return pageUrl(manifest).host;
+}
+/**
+ * Returns the old and new host if the app moved, or null if it didn't.
+ * A new page host counts first, then a new manifest host.
+ * A new path on the same host isn't a move.
+ */
+export function movedBetween(approved, reviewed) {
+    const pages = { from: servedFrom(approved), to: servedFrom(reviewed) };
+    if (pages.from !== pages.to) {
+        return pages;
+    }
+    const manifests = {
+        from: new URL(approved.manifest_url).host,
+        to: new URL(reviewed.manifest_url).host,
+    };
+    return manifests.from === manifests.to ? null : manifests;
+}
+//# sourceMappingURL=served-from.js.map

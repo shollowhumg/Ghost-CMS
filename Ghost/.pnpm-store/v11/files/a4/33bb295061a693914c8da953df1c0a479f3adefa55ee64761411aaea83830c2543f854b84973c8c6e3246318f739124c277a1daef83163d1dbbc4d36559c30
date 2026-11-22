@@ -1,0 +1,379 @@
+/**
+ * The calling code of each country a phone number can belong to, without its +.
+ *
+ * Copied from libphonenumber-js's metadata, which the package's tests check it against, so a
+ * browser app can offer a member their country's code without loading the rules that need the
+ * whole library. A country nobody dials, such as Antarctica, has none.
+ */
+export declare const CALLING_CODES: {
+    readonly AC: '247';
+    readonly AD: '376';
+    readonly AE: '971';
+    readonly AF: '93';
+    readonly AG: '1';
+    readonly AI: '1';
+    readonly AL: '355';
+    readonly AM: '374';
+    readonly AO: '244';
+    readonly AR: '54';
+    readonly AS: '1';
+    readonly AT: '43';
+    readonly AU: '61';
+    readonly AW: '297';
+    readonly AX: '358';
+    readonly AZ: '994';
+    readonly BA: '387';
+    readonly BB: '1';
+    readonly BD: '880';
+    readonly BE: '32';
+    readonly BF: '226';
+    readonly BG: '359';
+    readonly BH: '973';
+    readonly BI: '257';
+    readonly BJ: '229';
+    readonly BL: '590';
+    readonly BM: '1';
+    readonly BN: '673';
+    readonly BO: '591';
+    readonly BQ: '599';
+    readonly BR: '55';
+    readonly BS: '1';
+    readonly BT: '975';
+    readonly BW: '267';
+    readonly BY: '375';
+    readonly BZ: '501';
+    readonly CA: '1';
+    readonly CC: '61';
+    readonly CD: '243';
+    readonly CF: '236';
+    readonly CG: '242';
+    readonly CH: '41';
+    readonly CI: '225';
+    readonly CK: '682';
+    readonly CL: '56';
+    readonly CM: '237';
+    readonly CN: '86';
+    readonly CO: '57';
+    readonly CR: '506';
+    readonly CU: '53';
+    readonly CV: '238';
+    readonly CW: '599';
+    readonly CX: '61';
+    readonly CY: '357';
+    readonly CZ: '420';
+    readonly DE: '49';
+    readonly DJ: '253';
+    readonly DK: '45';
+    readonly DM: '1';
+    readonly DO: '1';
+    readonly DZ: '213';
+    readonly EC: '593';
+    readonly EE: '372';
+    readonly EG: '20';
+    readonly EH: '212';
+    readonly ER: '291';
+    readonly ES: '34';
+    readonly ET: '251';
+    readonly FI: '358';
+    readonly FJ: '679';
+    readonly FK: '500';
+    readonly FM: '691';
+    readonly FO: '298';
+    readonly FR: '33';
+    readonly GA: '241';
+    readonly GB: '44';
+    readonly GD: '1';
+    readonly GE: '995';
+    readonly GF: '594';
+    readonly GG: '44';
+    readonly GH: '233';
+    readonly GI: '350';
+    readonly GL: '299';
+    readonly GM: '220';
+    readonly GN: '224';
+    readonly GP: '590';
+    readonly GQ: '240';
+    readonly GR: '30';
+    readonly GT: '502';
+    readonly GU: '1';
+    readonly GW: '245';
+    readonly GY: '592';
+    readonly HK: '852';
+    readonly HN: '504';
+    readonly HR: '385';
+    readonly HT: '509';
+    readonly HU: '36';
+    readonly ID: '62';
+    readonly IE: '353';
+    readonly IL: '972';
+    readonly IM: '44';
+    readonly IN: '91';
+    readonly IO: '246';
+    readonly IQ: '964';
+    readonly IR: '98';
+    readonly IS: '354';
+    readonly IT: '39';
+    readonly JE: '44';
+    readonly JM: '1';
+    readonly JO: '962';
+    readonly JP: '81';
+    readonly KE: '254';
+    readonly KG: '996';
+    readonly KH: '855';
+    readonly KI: '686';
+    readonly KM: '269';
+    readonly KN: '1';
+    readonly KP: '850';
+    readonly KR: '82';
+    readonly KW: '965';
+    readonly KY: '1';
+    readonly KZ: '7';
+    readonly LA: '856';
+    readonly LB: '961';
+    readonly LC: '1';
+    readonly LI: '423';
+    readonly LK: '94';
+    readonly LR: '231';
+    readonly LS: '266';
+    readonly LT: '370';
+    readonly LU: '352';
+    readonly LV: '371';
+    readonly LY: '218';
+    readonly MA: '212';
+    readonly MC: '377';
+    readonly MD: '373';
+    readonly ME: '382';
+    readonly MF: '590';
+    readonly MG: '261';
+    readonly MH: '692';
+    readonly MK: '389';
+    readonly ML: '223';
+    readonly MM: '95';
+    readonly MN: '976';
+    readonly MO: '853';
+    readonly MP: '1';
+    readonly MQ: '596';
+    readonly MR: '222';
+    readonly MS: '1';
+    readonly MT: '356';
+    readonly MU: '230';
+    readonly MV: '960';
+    readonly MW: '265';
+    readonly MX: '52';
+    readonly MY: '60';
+    readonly MZ: '258';
+    readonly NA: '264';
+    readonly NC: '687';
+    readonly NE: '227';
+    readonly NF: '672';
+    readonly NG: '234';
+    readonly NI: '505';
+    readonly NL: '31';
+    readonly NO: '47';
+    readonly NP: '977';
+    readonly NR: '674';
+    readonly NU: '683';
+    readonly NZ: '64';
+    readonly OM: '968';
+    readonly PA: '507';
+    readonly PE: '51';
+    readonly PF: '689';
+    readonly PG: '675';
+    readonly PH: '63';
+    readonly PK: '92';
+    readonly PL: '48';
+    readonly PM: '508';
+    readonly PR: '1';
+    readonly PS: '970';
+    readonly PT: '351';
+    readonly PW: '680';
+    readonly PY: '595';
+    readonly QA: '974';
+    readonly RE: '262';
+    readonly RO: '40';
+    readonly RS: '381';
+    readonly RU: '7';
+    readonly RW: '250';
+    readonly SA: '966';
+    readonly SB: '677';
+    readonly SC: '248';
+    readonly SD: '249';
+    readonly SE: '46';
+    readonly SG: '65';
+    readonly SH: '290';
+    readonly SI: '386';
+    readonly SJ: '47';
+    readonly SK: '421';
+    readonly SL: '232';
+    readonly SM: '378';
+    readonly SN: '221';
+    readonly SO: '252';
+    readonly SR: '597';
+    readonly SS: '211';
+    readonly ST: '239';
+    readonly SV: '503';
+    readonly SX: '1';
+    readonly SY: '963';
+    readonly SZ: '268';
+    readonly TA: '290';
+    readonly TC: '1';
+    readonly TD: '235';
+    readonly TG: '228';
+    readonly TH: '66';
+    readonly TJ: '992';
+    readonly TK: '690';
+    readonly TL: '670';
+    readonly TM: '993';
+    readonly TN: '216';
+    readonly TO: '676';
+    readonly TR: '90';
+    readonly TT: '1';
+    readonly TV: '688';
+    readonly TW: '886';
+    readonly TZ: '255';
+    readonly UA: '380';
+    readonly UG: '256';
+    readonly US: '1';
+    readonly UY: '598';
+    readonly UZ: '998';
+    readonly VA: '39';
+    readonly VC: '1';
+    readonly VE: '58';
+    readonly VG: '1';
+    readonly VI: '1';
+    readonly VN: '84';
+    readonly VU: '678';
+    readonly WF: '681';
+    readonly WS: '685';
+    readonly XK: '383';
+    readonly YE: '967';
+    readonly YT: '262';
+    readonly ZA: '27';
+    readonly ZM: '260';
+    readonly ZW: '263';
+};
+/** A country a phone number can belong to: one with a calling code. */
+export type PhoneCountry = keyof typeof CALLING_CODES;
+export declare function isPhoneCountry(code: string): code is PhoneCountry;
+/**
+ * What each country dials before a calling code to call abroad, as a pattern: `00` in most, `011`
+ * in the US and Canada. Copied from libphonenumber-js's metadata, which the package's tests check it
+ * against, so a number written the way its country dials abroad is read as one with its code.
+ */
+export declare const INTERNATIONAL_PREFIXES: {
+    readonly [C in PhoneCountry]: string;
+};
+/**
+ * What places a number in one of the countries sharing its calling code, as libphonenumber-js
+ * places it with its smallest metadata: the leading digits of every number the country gives out,
+ * or where it has none, the pattern its numbers fit and those of each kind it gives out, such as
+ * mobile or fixed line.
+ */
+type NumberingPlan = {
+    readonly country: PhoneCountry;
+    readonly leading: string;
+} | {
+    readonly country: PhoneCountry;
+    readonly general: string;
+    readonly numbers: readonly string[];
+};
+/**
+ * The countries sharing each calling code several countries share, in libphonenumber-js's order,
+ * the code's main country first, each with what places a number in it. Copied from the library's
+ * smallest metadata, which the package's tests check it against, so a browser app can show the
+ * country a number is from, such as Canada for a Toronto number, without loading the library.
+ */
+export declare const SHARED_CODES: {
+    readonly [callingCode: string]: readonly NumberingPlan[];
+};
+/**
+ * A number written with its country code, after a + or the 00 most countries dial abroad with,
+ * split into the country the code names and what follows the code as typed, or undefined for one
+ * written without a code or with one no country has.
+ */
+export declare function readCallingCode(text: string): {
+    country: PhoneCountry;
+    callingCode: string;
+    rest: string;
+} | undefined;
+/**
+ * The countries a phone number can be from, out of `countries` as an app names them, each named
+ * with its code, such as `United Kingdom (+44)`, in the order given.
+ */
+export declare function phoneCountryOptions(countries: readonly {
+    value: string;
+    label: string;
+}[]): {
+    value: PhoneCountry;
+    label: string;
+}[];
+/**
+ * The country a phone input shows for what was typed, given the one picked. A number written as
+ * it is dialled at home keeps the one picked, as Stripe Checkout keeps it. One written with its
+ * code shows the country its digits are from once they say, so +1 416 shows Canada; until then,
+ * the one picked while the code is that country's, so picking Canada keeps Canada while a +1
+ * number is typed, and otherwise the country the code names.
+ */
+export declare function shownCountry(typed: string, picked: PhoneCountry | undefined): PhoneCountry | undefined;
+/**
+ * A number as a phone field is sent it, from what was typed beside `country`: a number written as
+ * it is dialled at home gets the country's code in front, and one written with its own code keeps
+ * it, read as after a + whether it was written after a +, a 00, or the prefix the country dials
+ * abroad with. Nothing typed stays nothing, so an emptied field is cleared, and a number written
+ * without a code when no country is shown goes as it was written, for the site to say what it
+ * needs. The site drops a national 0 after the code.
+ */
+export declare function withCallingCode(text: string, country: PhoneCountry | undefined): string;
+/**
+ * Whether `text` contains only characters that are valid in a phone number, so a phone input can
+ * flag an invalid character, such as a letter, while typing and without loading
+ * libphonenumber-js. It doesn't check that the text is a valid number: the server does that.
+ * Surrounding whitespace is ignored, as the server trims it. The one input this flags that the
+ * server accepts is an RFC 3966 `tel:` URI, such as `tel:2079460000;phone-context=+44`, which
+ * libphonenumber-js can read a number from.
+ */
+export declare function hasOnlyPhoneCharacters(text: string): boolean;
+/** What a phone input holds while someone edits it: what they typed, and the country picked. */
+export interface PhoneEntry {
+    readonly typed: string;
+    readonly picked: PhoneCountry | undefined;
+}
+/**
+ * A phone input as it opens on the number a field holds: the country that number is from, so
+ * rewriting it as it is dialled at home keeps its country, and for a field holding none, the
+ * country of the reader's `timeZone` where it names one, as it says where they are, else of their
+ * language.
+ */
+export declare function startPhoneEntry(held: string, locales: readonly string[], timeZone?: string): PhoneEntry;
+/**
+ * A phone input once the number it holds is replaced from outside, such as by the number the site
+ * kept: the country that number is from, and the number after its code.
+ */
+export declare function holdNumber(entry: PhoneEntry, held: string): PhoneEntry;
+/** A phone input once `text` is typed into it, and the number it sends. */
+export declare function typeNumber(entry: PhoneEntry, text: string): {
+    entry: PhoneEntry;
+    number: string;
+};
+/**
+ * A phone input once `country` is picked, and the number it sends: a number written with its
+ * code takes the country's code in its place.
+ */
+export declare function pickCountry(entry: PhoneEntry, country: PhoneCountry): {
+    entry: PhoneEntry;
+    number: string;
+};
+/**
+ * The country a time zone is in, such as Portugal for `Europe/Lisbon`, from the browser's own time
+ * zone data: none for a zone no country has, such as `Etc/UTC`, or where the browser has no such
+ * data. The `likely` country is tried first, as reading every country's zones takes a moment.
+ * Safari names some zones newer than its own data does, such as `Asia/Kolkata`, and finds none.
+ */
+export declare function phoneCountryOfTimeZone(timeZone: string | undefined, likely?: PhoneCountry): PhoneCountry | undefined;
+/**
+ * The country someone most likely has a number from, by the region of the first of their
+ * `locales` that names one a phone can belong to: `en-GB` is the United Kingdom, and `fr` France.
+ */
+export declare function phoneCountryOfLocales(locales: readonly string[]): PhoneCountry | undefined;
+export {};
+//# sourceMappingURL=phone.d.ts.map

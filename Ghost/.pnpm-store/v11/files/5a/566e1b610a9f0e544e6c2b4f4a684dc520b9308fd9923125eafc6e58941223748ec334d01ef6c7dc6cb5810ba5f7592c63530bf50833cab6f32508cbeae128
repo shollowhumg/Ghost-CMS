@@ -1,0 +1,19 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.hash = hash;
+exports.compare = compare;
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
+let HASH_ROUNDS = 10;
+if (process.env.NODE_ENV?.startsWith('testing')) {
+    HASH_ROUNDS = 1;
+}
+async function hash(plainPassword) {
+    const salt = await bcryptjs_1.default.genSalt(HASH_ROUNDS);
+    return bcryptjs_1.default.hash(plainPassword, salt);
+}
+function compare(plainPassword, hashedPassword) {
+    return bcryptjs_1.default.compare(plainPassword, hashedPassword);
+}

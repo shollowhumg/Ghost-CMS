@@ -1,0 +1,115 @@
+/** Returns the scope key for a reusable payer session channel. */
+export function channelKey(scope) {
+    const { payee, token, escrow, chainId } = scope;
+    return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:${chainId}`;
+}
+/** Returns the scope key for a stored channel entry. */
+export function entryKey(entry) {
+    return channelKey({
+        payee: entry.descriptor.payee,
+        token: entry.descriptor.token,
+        escrow: entry.escrow,
+        chainId: entry.chainId,
+    });
+}
+/** Creates the default in-memory {@link ChannelStore}. */
+export function createChannelStore() {
+    const channels = new Map();
+    return {
+        get: (key) => channels.get(key),
+        set(entry) {
+            channels.set(entryKey(entry), entry);
+        },
+        delete(key) {
+            channels.delete(key);
+        },
+    };
+}
+/** Converts a channel entry into its JSON-safe stored form. */
+export function serializeEntry(entry) {
+    return {
+        ...entry,
+        cumulativeAmount: entry.cumulativeAmount.toString(),
+        deposit: entry.deposit.toString(),
+    };
+}
+/** Restores a channel entry from its JSON-safe stored form. */
+export function deserializeEntry(stored) {
+    return {
+        ...stored,
+        cumulativeAmount: BigInt(stored.cumulativeAmount),
+        deposit: BigInt(stored.deposit),
+    };
+}
+/** Prefix for serialized channel entries persisted by {@link createJsonChannelStore}. */
+const channelPrefix = 'chan:';
+/** Wraps a string KV backend as a bigint-safe channel store. */
+export function createJsonChannelStore(kv) {
+    return {
+        async get(key) {
+            const value = await kv.get(channelPrefix + key);
+            if (value === undefined)
+                return undefined;
+            return deserializeEntry(JSON.parse(value));
+        },
+        async set(entry) {
+            await kv.set(channelPrefix + entryKey(entry), JSON.stringify(serializeEntry(entry)));
+        },
+        async delete(key) {
+            await kv.delete(channelPrefix + key);
+        },
+    };
+}
+const pendingOperations = new WeakMap();
+const fundingStores = new WeakMap();
+/** @internal Shares funding coordination between a manager's store view and its backing store. */
+export function registerFundingStore(view, backing) {
+    fundingStores.set(view, fundingStores.get(backing) ?? backing);
+}
+async function exclusive(store, key, operation) {
+    let pending = pendingOperations.get(store);
+    if (!pending) {
+        pending = new Map();
+        pendingOperations.set(store, pending);
+    }
+    const previous = pending.get(key) ?? Promise.resolve();
+    const result = previous.catch(() => { }).then(operation);
+    pending.set(key, result);
+    try {
+        return await result;
+    }
+    finally {
+        if (pending.get(key) === result)
+            pending.delete(key);
+    }
+}
+/** @internal Serializes funding decisions for callers sharing one backing store in this process. */
+export function withFundingLock(store, key, operation) {
+    return exclusive(fundingStores.get(store) ?? store, `funding:${key}`, operation);
+}
+/** @internal Serializes writes and preserves unresolved funding across stale channel copies. */
+export async function persistChannel(store, entry) {
+    await exclusive(store, `write:${entryKey(entry)}`, async () => {
+        const current = await store.get(entryKey(entry));
+        if (current?.origin !== undefined) {
+            if (entry.origin !== undefined && entry.origin !== current.origin)
+                throw new Error('SessionManager: stored channel origin mismatch');
+            entry.origin = current.origin;
+        }
+        if (current?.uncertainTopUp) {
+            if (current.channelId !== entry.channelId)
+                throw new Error('Session funding outcome is unknown; reconcile the pending payment before replacing the channel.');
+            entry.uncertainTopUp = true;
+        }
+        await store.set(entry);
+    });
+}
+/** @internal Retains unresolved funding records through close and stale-entry cleanup. */
+export async function deleteChannel(store, key) {
+    await exclusive(store, `write:${key}`, async () => {
+        if ((await store.get(key))?.uncertainTopUp)
+            return;
+        await store.delete(key);
+    });
+}
+//# sourceMappingURL=ChannelStore.js.map

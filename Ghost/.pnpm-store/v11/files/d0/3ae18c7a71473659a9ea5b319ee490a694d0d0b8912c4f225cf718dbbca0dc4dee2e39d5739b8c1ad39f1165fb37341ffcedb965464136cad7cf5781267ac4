@@ -1,0 +1,564 @@
+import {
+  isAuthCaptureExtra
+} from "./chunk-XE4FB4AB.mjs";
+import {
+  OPERATOR_EIP712_DOMAIN,
+  REFUND_TYPES,
+  VOID_TYPES,
+  captureTypesForDeployment,
+  chargeTypesForDeployment,
+  extraAddress,
+  feeAmountFromBps,
+  isNonZeroAddress,
+  resolveAuthCaptureDeployment
+} from "./chunk-F43KMW3I.mjs";
+import {
+  verifyTypedDataSignature
+} from "./chunk-5JE2UIZP.mjs";
+import {
+  getEvmChainId
+} from "./chunk-EKCH75YB.mjs";
+
+// src/auth-capture/errors.ts
+var ErrInvalidPayloadFormat = "invalid_auth_capture_evm_payload_format";
+var ErrInvalidPayloadType = "invalid_auth_capture_evm_payload_type";
+var ErrVoidAuthorizerSignature = "invalid_auth_capture_evm_void_authorizer_signature";
+var ErrVoidRemainderFullCapture = "invalid_auth_capture_evm_void_remainder_full_capture";
+var ErrUnsupportedPaymentFlow = "invalid_auth_capture_evm_unsupported_payment_flow";
+var ErrUnsupportedScheme = "invalid_auth_capture_evm_scheme";
+var ErrNetworkMismatch = "invalid_auth_capture_evm_network_mismatch";
+var ErrInvalidNetwork = "invalid_network";
+var ErrInvalidAuthCaptureExtra = "invalid_auth_capture_evm_extra";
+var ErrMissingReceiverAuthorizer = "invalid_auth_capture_evm_missing_receiver_authorizer";
+var ErrUnsupportedOperatorType = "invalid_auth_capture_evm_unsupported_operator_type";
+var ErrInvalidPolicy = "invalid_auth_capture_evm_policy";
+var ErrLifecycleNotRelayed = "invalid_auth_capture_evm_lifecycle_not_relayed";
+var ErrOperatorNotAdmitted = "invalid_auth_capture_evm_operator_not_admitted";
+var ErrOperatorMismatch = "invalid_auth_capture_evm_operator_mismatch";
+var ErrSaltBindingMismatch = "invalid_auth_capture_evm_salt_binding_mismatch";
+var ErrAuthorizerSignature = "invalid_auth_capture_evm_authorizer_signature";
+var ErrUnauthenticatedAuthorizerRequest = "invalid_auth_capture_evm_unauthenticated_authorizer_request";
+var ErrDelegatedAuthUnavailable = "invalid_auth_capture_evm_delegated_auth_unavailable";
+var ErrUnexpectedPaymentState = "invalid_auth_capture_evm_unexpected_payment_state";
+var ErrRefundFundingUnavailable = "invalid_auth_capture_evm_refund_funding_unavailable";
+var ErrUnsupportedAssetTransferMethod = "invalid_auth_capture_evm_unsupported_asset_transfer_method";
+var ErrPayloadMethodMismatch = "invalid_auth_capture_evm_payload_method_mismatch";
+var ErrCaptureDeadlineExpired = "invalid_auth_capture_evm_capture_deadline_expired";
+var ErrRefundDeadlineExpired = "invalid_auth_capture_evm_refund_deadline_expired";
+var ErrInvalidDeadlineOrdering = "invalid_auth_capture_evm_deadline_ordering";
+var ErrAuthorizationExpired = "invalid_auth_capture_evm_authorization_expired";
+var ErrAuthorizationNotYetValid = "invalid_auth_capture_evm_authorization_not_yet_valid";
+var ErrTokenCollectorMismatch = "invalid_auth_capture_evm_token_collector_mismatch";
+var ErrTokenMismatch = "invalid_auth_capture_evm_token_mismatch";
+var ErrInvalidAuthCaptureSignature = "invalid_auth_capture_evm_signature";
+var ErrErc6492FactoryNotAllowed = "invalid_auth_capture_evm_erc6492_factory_not_allowed";
+var ErrAmountMismatch = "invalid_auth_capture_evm_amount_mismatch";
+var ErrNonceMismatch = "invalid_auth_capture_evm_nonce_mismatch";
+var ErrInsufficientBalance = "invalid_auth_capture_evm_insufficient_balance";
+var ErrSimulationFailed = "invalid_auth_capture_evm_simulation_failed";
+var ErrPaymentInfoMismatch = "invalid_auth_capture_evm_payment_info_mismatch";
+var ErrUndeployedSmartWallet = "invalid_auth_capture_evm_payload_undeployed_smart_wallet";
+var ErrPaymentAlreadyCollected = "invalid_auth_capture_evm_payment_already_collected";
+var ErrTokenCollectionFailed = "invalid_auth_capture_evm_token_collection_failed";
+var ErrInvalidCollector = "invalid_auth_capture_evm_collector";
+var ErrAmountOverflow = "invalid_auth_capture_evm_amount_overflow";
+var ErrInvalidFeeBps = "invalid_auth_capture_evm_fee_bps";
+var ErrInvalidFeeBpsRange = "invalid_auth_capture_evm_fee_bps_range";
+var ErrFeeBpsOutOfRange = "invalid_auth_capture_evm_fee_bps_out_of_range";
+var ErrZeroFeeReceiver = "invalid_auth_capture_evm_zero_fee_receiver";
+var ErrInvalidFeeReceiver = "invalid_auth_capture_evm_fee_receiver";
+var ErrInsufficientAuthorization = "invalid_auth_capture_evm_insufficient_authorization";
+var ErrZeroAuthorization = "invalid_auth_capture_evm_zero_authorization";
+var ErrRefundExceedsCapture = "invalid_auth_capture_evm_refund_exceeds_capture";
+var ErrVerificationFailed = "invalid_auth_capture_evm_verification_failed";
+var ErrTransactionReverted = "invalid_auth_capture_evm_transaction_reverted";
+var ErrSettlementPending = "settlement_pending";
+var ErrServerLifecycleUnavailable = "invalid_auth_capture_evm_server_lifecycle_unavailable";
+var ESCROW_ERROR_TO_INVALID_REASON = {
+  AfterPreApprovalExpiry: ErrAuthorizationExpired,
+  InvalidExpiries: ErrInvalidDeadlineOrdering,
+  ExceedsMaxAmount: ErrAmountMismatch,
+  PaymentAlreadyCollected: ErrPaymentAlreadyCollected,
+  TokenCollectionFailed: ErrTokenCollectionFailed,
+  InvalidCollectorForOperation: ErrInvalidCollector,
+  InvalidSender: ErrOperatorMismatch,
+  ZeroAmount: ErrAmountMismatch,
+  AmountOverflow: ErrAmountOverflow,
+  FeeBpsOverflow: ErrInvalidFeeBps,
+  InvalidFeeBpsRange: ErrInvalidFeeBpsRange,
+  FeeBpsOutOfRange: ErrFeeBpsOutOfRange,
+  FeeAmountOutOfRange: ErrFeeBpsOutOfRange,
+  ZeroFeeReceiver: ErrZeroFeeReceiver,
+  InvalidFeeReceiver: ErrInvalidFeeReceiver,
+  AfterAuthorizationExpiry: ErrCaptureDeadlineExpired,
+  InsufficientAuthorization: ErrInsufficientAuthorization,
+  ZeroAuthorization: ErrZeroAuthorization,
+  AfterRefundExpiry: ErrRefundDeadlineExpired,
+  RefundExceedsCapture: ErrRefundExceedsCapture
+};
+
+// src/auth-capture/extra.ts
+import { getAddress, isAddress, isAddressEqual, zeroAddress } from "viem";
+var MAX_FEE_BPS = 1e4;
+function parseAuthCaptureExtra(extra) {
+  if (!isAuthCaptureExtra(extra)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const raw = extra;
+  if (raw.autoCapture === true) {
+    return { error: ErrUnsupportedPaymentFlow };
+  }
+  const deployment = resolveAuthCaptureDeployment(raw.authCaptureEscrow);
+  if (!deployment) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const paymentFlow = raw.paymentFlow ?? "escrow";
+  if (paymentFlow !== "escrow" && paymentFlow !== "authorization") {
+    return { error: ErrUnsupportedPaymentFlow };
+  }
+  const captureMode = raw.captureMode ?? "sync";
+  if (captureMode !== "sync" && captureMode !== "deferred") {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const operatorType = raw.operatorType ?? "delegated";
+  if (operatorType === "policy") {
+    return { error: ErrUnsupportedOperatorType };
+  }
+  if (operatorType !== "delegated" && operatorType !== "custom") {
+    return { error: ErrUnsupportedOperatorType };
+  }
+  const assetTransferMethod = raw.assetTransferMethod ?? "eip3009";
+  if (assetTransferMethod !== "eip3009" && assetTransferMethod !== "permit2") {
+    return { error: ErrUnsupportedAssetTransferMethod };
+  }
+  if (!Number.isInteger(raw.minFeeBps) || !Number.isInteger(raw.maxFeeBps) || raw.minFeeBps < 0 || raw.maxFeeBps < 0 || raw.minFeeBps > MAX_FEE_BPS || raw.maxFeeBps > MAX_FEE_BPS) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  if (raw.minFeeBps > raw.maxFeeBps) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  if (!isAddress(raw.captureAuthorizer) || !isAddress(raw.feeRecipient)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const feeRecipient = getAddress(raw.feeRecipient);
+  if (isAddressEqual(feeRecipient, zeroAddress) && (raw.minFeeBps !== 0 || raw.maxFeeBps !== 0)) {
+    return { error: ErrInvalidAuthCaptureExtra };
+  }
+  const receiverAuthorizer = extraAddress(raw.receiverAuthorizer);
+  if (paymentFlow === "authorization" && !isNonZeroAddress(receiverAuthorizer)) {
+    return { error: ErrMissingReceiverAuthorizer };
+  }
+  return {
+    extra: {
+      ...raw,
+      captureAuthorizer: getAddress(raw.captureAuthorizer),
+      feeRecipient,
+      paymentFlow,
+      captureMode,
+      operatorType,
+      assetTransferMethod,
+      receiverAuthorizer,
+      policy: extraAddress(raw.policy),
+      authCaptureEscrow: deployment.escrow,
+      deployment
+    }
+  };
+}
+function feeFieldMatchesDeployment(deployment, fields) {
+  if (deployment.version === "v1.0") {
+    return fields.feeBps !== void 0 && fields.feeAmount === void 0;
+  }
+  return fields.feeAmount !== void 0 && fields.feeBps === void 0;
+}
+function validateSubmittedFee(extra, amount, fee) {
+  const amountBig = typeof amount === "bigint" ? amount : BigInt(amount);
+  const feeReceiver = fee.feeReceiver;
+  if (!isAddress(feeReceiver)) {
+    return ErrInvalidFeeReceiver;
+  }
+  const receiver = getAddress(feeReceiver);
+  if (!isAddressEqual(extra.feeRecipient, zeroAddress)) {
+    if (!isAddressEqual(receiver, extra.feeRecipient)) {
+      return ErrInvalidFeeReceiver;
+    }
+  }
+  if (fee.version === "v1.0") {
+    const feeBps = fee.feeBps;
+    if (!Number.isInteger(feeBps) || feeBps < extra.minFeeBps || feeBps > extra.maxFeeBps) {
+      return ErrFeeBpsOutOfRange;
+    }
+    if (isAddressEqual(receiver, zeroAddress) && feeBps !== 0) {
+      return ErrZeroFeeReceiver;
+    }
+    return void 0;
+  }
+  let feeAmount;
+  try {
+    feeAmount = BigInt(fee.feeAmount);
+  } catch {
+    return ErrFeeBpsOutOfRange;
+  }
+  const minFee = feeAmountFromBps(amountBig, extra.minFeeBps);
+  const maxFee = feeAmountFromBps(amountBig, extra.maxFeeBps);
+  if (feeAmount < minFee || feeAmount > maxFee) {
+    return ErrFeeBpsOutOfRange;
+  }
+  if (isAddressEqual(receiver, zeroAddress) && feeAmount !== 0n) {
+    return ErrZeroFeeReceiver;
+  }
+  return void 0;
+}
+function defaultSubmittedFee(extra, amount) {
+  const amountBig = typeof amount === "bigint" ? amount : BigInt(amount);
+  if (extra.deployment.version === "v1.0") {
+    return { version: "v1.0", feeBps: extra.minFeeBps, feeReceiver: extra.feeRecipient };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: feeAmountFromBps(amountBig, extra.minFeeBps).toString(),
+    feeReceiver: extra.feeRecipient
+  };
+}
+function submittedFeeAmount(fee, amount) {
+  if (fee.version === "v1.0") {
+    return feeAmountFromBps(amount, fee.feeBps);
+  }
+  return BigInt(fee.feeAmount);
+}
+function validateOperator(extra, submitters, config, isLifecycle) {
+  if (isNonZeroAddress(extra.policy)) {
+    return ErrInvalidPolicy;
+  }
+  if (extra.operatorType === "custom") {
+    if (!isOperatorAdmitted(extra.captureAuthorizer, config?.operators)) {
+      return ErrOperatorNotAdmitted;
+    }
+    if (isLifecycle) {
+      return ErrLifecycleNotRelayed;
+    }
+    return void 0;
+  }
+  if (!isSubmitter(extra.captureAuthorizer, submitters)) {
+    return ErrOperatorNotAdmitted;
+  }
+  if (isLifecycle && !isNonZeroAddress(extra.receiverAuthorizer)) {
+    return ErrLifecycleNotRelayed;
+  }
+  return void 0;
+}
+function isSubmitter(address, submitters) {
+  return submitters.some((s) => isAddressEqual(s, address));
+}
+function isOperatorAdmitted(address, operators) {
+  if (!operators || operators.length === 0) return false;
+  return operators.some((entry) => {
+    if (entry.operatorType !== "custom") return false;
+    if (entry.address === "*") return true;
+    return isAddress(entry.address) && isAddressEqual(entry.address, address);
+  });
+}
+function resolveSettleTarget(extra) {
+  return extra.operatorType === "custom" ? extra.captureAuthorizer : extra.deployment.escrow;
+}
+function verifyCommon(payloadScheme, payloadNetwork, requirements, scheme, submitters, config, isLifecycle) {
+  if (payloadScheme !== scheme || requirements.scheme !== scheme) {
+    return { error: ErrUnsupportedScheme };
+  }
+  if (payloadNetwork !== requirements.network) {
+    return { error: ErrNetworkMismatch };
+  }
+  try {
+    getEvmChainId(requirements.network);
+  } catch {
+    return { error: ErrInvalidNetwork };
+  }
+  const parsed = parseAuthCaptureExtra(requirements.extra);
+  if ("error" in parsed) {
+    return parsed;
+  }
+  const operatorError = validateOperator(parsed.extra, submitters, config, isLifecycle);
+  if (operatorError) {
+    return { error: operatorError };
+  }
+  return parsed;
+}
+function canonicalAuthCaptureEscrow(value) {
+  const deployment = resolveAuthCaptureDeployment(value);
+  return (deployment ?? resolveAuthCaptureDeployment(void 0)).escrow;
+}
+function captureFeeFromPayload(extra, wirePayload) {
+  if (!feeFieldMatchesDeployment(extra.deployment, wirePayload)) {
+    return void 0;
+  }
+  if (extra.deployment.version === "v1.0") {
+    return {
+      version: "v1.0",
+      feeBps: wirePayload.feeBps,
+      feeReceiver: wirePayload.feeReceiver
+    };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: wirePayload.feeAmount,
+    feeReceiver: wirePayload.feeReceiver
+  };
+}
+function captureEscrowArgs(tuple, amount, fee) {
+  if (fee.version === "v1.0") {
+    return [tuple, amount, fee.feeBps, fee.feeReceiver];
+  }
+  return [tuple, amount, BigInt(fee.feeAmount), fee.feeReceiver];
+}
+function chargeEscrowArgs(tuple, amount, tokenCollector, collectorData, fee) {
+  if (fee.version === "v1.0") {
+    return [tuple, amount, tokenCollector, collectorData, fee.feeBps, fee.feeReceiver];
+  }
+  return [
+    tuple,
+    amount,
+    tokenCollector,
+    collectorData,
+    BigInt(fee.feeAmount),
+    fee.feeReceiver
+  ];
+}
+function chargeFeeFromCollectPayload(extra, wirePayload) {
+  if (!feeFieldMatchesDeployment(extra.deployment, wirePayload)) {
+    return void 0;
+  }
+  if (extra.deployment.version === "v1.0") {
+    return {
+      version: "v1.0",
+      feeBps: wirePayload.feeBps,
+      feeReceiver: wirePayload.feeReceiver
+    };
+  }
+  return {
+    version: "v1.1",
+    feeAmount: wirePayload.feeAmount,
+    feeReceiver: wirePayload.feeReceiver
+  };
+}
+function authorizerMode(receiverAuthorizer, signer) {
+  if (!isNonZeroAddress(receiverAuthorizer)) return "collect-only";
+  return signer && isAddressEqual(signer.address, receiverAuthorizer) ? "self" : "delegated";
+}
+
+// src/auth-capture/authorizerSigner.ts
+import { getAddress as getAddress2, keccak256 } from "viem";
+function getOperatorEip712Domain(chainId, captureAuthorizer) {
+  return {
+    name: OPERATOR_EIP712_DOMAIN.name,
+    version: OPERATOR_EIP712_DOMAIN.version,
+    chainId,
+    verifyingContract: getAddress2(captureAuthorizer)
+  };
+}
+async function signCharge(signer, chainId, captureAuthorizer, deployment, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: chargeTypesForDeployment(deployment),
+    primaryType: "Charge",
+    message: chargeMessage(deployment, digest)
+  });
+}
+async function signVoid(signer, chainId, captureAuthorizer, paymentInfoHash) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: VOID_TYPES,
+    primaryType: "Void",
+    message: { paymentInfoHash }
+  });
+}
+async function signCapture(signer, chainId, captureAuthorizer, deployment, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: captureTypesForDeployment(deployment),
+    primaryType: "Capture",
+    message: captureMessage(deployment, digest)
+  });
+}
+async function signRefund(signer, chainId, captureAuthorizer, digest) {
+  return signer.signTypedData({
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: REFUND_TYPES,
+    primaryType: "Refund",
+    message: refundMessage(digest)
+  });
+}
+async function verifyCharge(facilitatorSigner, authorizer, chainId, captureAuthorizer, deployment, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: getAddress2(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: chargeTypesForDeployment(deployment),
+    primaryType: "Charge",
+    message: chargeMessage(deployment, digest),
+    signature
+  });
+}
+async function verifyVoid(facilitatorSigner, authorizer, chainId, captureAuthorizer, paymentInfoHash, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: getAddress2(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: VOID_TYPES,
+    primaryType: "Void",
+    message: { paymentInfoHash },
+    signature
+  });
+}
+async function verifyCapture(facilitatorSigner, authorizer, chainId, captureAuthorizer, deployment, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: getAddress2(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: captureTypesForDeployment(deployment),
+    primaryType: "Capture",
+    message: captureMessage(deployment, digest),
+    signature
+  });
+}
+async function verifyRefund(facilitatorSigner, authorizer, chainId, captureAuthorizer, digest, signature) {
+  return verifyTypedDataSignature(facilitatorSigner, {
+    address: getAddress2(authorizer),
+    domain: getOperatorEip712Domain(chainId, captureAuthorizer),
+    types: REFUND_TYPES,
+    primaryType: "Refund",
+    message: refundMessage(digest),
+    signature
+  });
+}
+function chargeMessage(deployment, digest) {
+  const base = {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    tokenCollector: getAddress2(digest.tokenCollector),
+    collectorDataHash: keccak256(digest.collectorData),
+    feeReceiver: getAddress2(digest.feeReceiver)
+  };
+  if (deployment.version === "v1.0") {
+    return { ...base, feeBps: digest.feeBps };
+  }
+  return { ...base, feeAmount: BigInt(digest.feeAmount) };
+}
+function captureMessage(deployment, digest) {
+  const base = {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    feeReceiver: getAddress2(digest.feeReceiver),
+    expectedCapturableAmount: BigInt(digest.expectedCapturableAmount),
+    expectedRefundableAmount: BigInt(digest.expectedRefundableAmount)
+  };
+  if (deployment.version === "v1.0") {
+    return { ...base, feeBps: digest.feeBps };
+  }
+  return { ...base, feeAmount: BigInt(digest.feeAmount) };
+}
+function refundMessage(digest) {
+  return {
+    paymentInfoHash: digest.paymentInfoHash,
+    amount: BigInt(digest.amount),
+    tokenCollector: getAddress2(digest.tokenCollector),
+    expectedCapturableAmount: BigInt(digest.expectedCapturableAmount),
+    expectedRefundableAmount: BigInt(digest.expectedRefundableAmount)
+  };
+}
+
+// src/auth-capture/utils.ts
+function reconstructPaymentInfo(payer, preApprovalExpiry, salt, requirements, extra, maxAmount = requirements.amount) {
+  return {
+    operator: extra.captureAuthorizer,
+    payer,
+    receiver: requirements.payTo,
+    token: requirements.asset,
+    maxAmount,
+    preApprovalExpiry,
+    authorizationExpiry: extra.captureDeadline,
+    refundExpiry: extra.refundDeadline,
+    minFeeBps: extra.minFeeBps,
+    maxFeeBps: extra.maxFeeBps,
+    feeReceiver: extra.feeRecipient,
+    salt
+  };
+}
+function paymentInfoToContractTuple(p) {
+  return { ...p, maxAmount: BigInt(p.maxAmount), salt: BigInt(p.salt) };
+}
+function unpackForSettle(wirePayload, assetTransferMethod, deployment) {
+  if (assetTransferMethod === "eip3009") {
+    const p2 = wirePayload;
+    return {
+      preApprovalExpiry: Number(p2.authorization.validBefore),
+      amount: BigInt(p2.authorization.value),
+      tokenCollector: deployment.eip3009Collector,
+      collectorData: p2.signature
+    };
+  }
+  const p = wirePayload;
+  return {
+    preApprovalExpiry: Number(p.permit2Authorization.deadline),
+    amount: BigInt(p.permit2Authorization.permitted.amount),
+    tokenCollector: deployment.permit2Collector,
+    collectorData: p.signature
+  };
+}
+
+export {
+  ErrInvalidPayloadFormat,
+  ErrInvalidPayloadType,
+  ErrVoidAuthorizerSignature,
+  ErrVoidRemainderFullCapture,
+  ErrOperatorNotAdmitted,
+  ErrOperatorMismatch,
+  ErrSaltBindingMismatch,
+  ErrAuthorizerSignature,
+  ErrUnauthenticatedAuthorizerRequest,
+  ErrDelegatedAuthUnavailable,
+  ErrUnexpectedPaymentState,
+  ErrRefundFundingUnavailable,
+  ErrPayloadMethodMismatch,
+  ErrCaptureDeadlineExpired,
+  ErrRefundDeadlineExpired,
+  ErrInvalidDeadlineOrdering,
+  ErrAuthorizationExpired,
+  ErrAuthorizationNotYetValid,
+  ErrTokenCollectorMismatch,
+  ErrTokenMismatch,
+  ErrInvalidAuthCaptureSignature,
+  ErrErc6492FactoryNotAllowed,
+  ErrAmountMismatch,
+  ErrNonceMismatch,
+  ErrInsufficientBalance,
+  ErrSimulationFailed,
+  ErrPaymentInfoMismatch,
+  ErrUndeployedSmartWallet,
+  ErrZeroAuthorization,
+  ErrRefundExceedsCapture,
+  ErrVerificationFailed,
+  ErrTransactionReverted,
+  ErrSettlementPending,
+  ErrServerLifecycleUnavailable,
+  ESCROW_ERROR_TO_INVALID_REASON,
+  parseAuthCaptureExtra,
+  validateSubmittedFee,
+  defaultSubmittedFee,
+  submittedFeeAmount,
+  resolveSettleTarget,
+  verifyCommon,
+  canonicalAuthCaptureEscrow,
+  captureFeeFromPayload,
+  captureEscrowArgs,
+  chargeEscrowArgs,
+  chargeFeeFromCollectPayload,
+  authorizerMode,
+  signCharge,
+  signVoid,
+  signCapture,
+  signRefund,
+  verifyCharge,
+  verifyVoid,
+  verifyCapture,
+  verifyRefund,
+  reconstructPaymentInfo,
+  paymentInfoToContractTuple,
+  unpackForSettle
+};
+//# sourceMappingURL=chunk-Q6Q6NZMH.mjs.map

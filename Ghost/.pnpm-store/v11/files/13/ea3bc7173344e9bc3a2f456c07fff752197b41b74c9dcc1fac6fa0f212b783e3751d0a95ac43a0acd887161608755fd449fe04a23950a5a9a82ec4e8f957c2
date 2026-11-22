@@ -1,0 +1,87 @@
+import createDebug from '@tryghost/debug';
+import _ from 'lodash';
+const debug = createDebug('frame');
+/** Holds all information associated with an API request. */
+export class Frame {
+    #headers = {};
+    original;
+    options = {};
+    data = {};
+    user = {};
+    file = {};
+    files = [];
+    apiType = null;
+    docName = null;
+    method = null;
+    response = null;
+    constructor(obj = {}) {
+        this.original = obj;
+    }
+    configure(apiConfig, { deferBodyClone = false } = {}) {
+        debug('configure');
+        let optionNames = apiConfig.options;
+        if (typeof optionNames === 'function') {
+            optionNames = optionNames(this);
+        }
+        if (Array.isArray(optionNames)) {
+            Object.assign(this.options, _.pick(this.original.query, optionNames));
+            Object.assign(this.options, _.pick(this.original.params, optionNames));
+            Object.assign(this.options, _.pick(this.original.options, optionNames));
+        }
+        this.options.context = this.original.context;
+        const body = this.original.body;
+        const hasBody = body && Object.keys(body).length > 0;
+        if (hasBody) {
+            if (deferBodyClone) {
+                // Schema callbacks can use validated input without ever needing a
+                // mutable working body. Materialize that copy only on first access.
+                const setData = (value) => {
+                    Object.defineProperty(this, 'data', {
+                        value,
+                        writable: true,
+                        enumerable: true,
+                        configurable: true,
+                    });
+                };
+                Object.defineProperty(this, 'data', {
+                    get: () => {
+                        const data = _.cloneDeep(body);
+                        setData(data);
+                        return data;
+                    },
+                    set: setData,
+                    enumerable: true,
+                    configurable: true,
+                });
+            }
+            else {
+                this.data = _.cloneDeep(body);
+            }
+        }
+        else {
+            let dataNames = apiConfig.data;
+            if (typeof dataNames === 'function') {
+                dataNames = dataNames(this);
+            }
+            if (Array.isArray(dataNames)) {
+                Object.assign(this.data, _.pick(this.original.query, dataNames));
+                Object.assign(this.data, _.pick(this.original.params, dataNames));
+                Object.assign(this.data, _.pick(this.original.options, dataNames));
+            }
+        }
+        this.user = this.original.user;
+        this.file = this.original.file;
+        this.files = this.original.files ?? [];
+        debug('original', this.original);
+        debug('options', this.options);
+        debug('data', hasBody ? body : this.data);
+    }
+    setHeader(header, value) {
+        this.#headers[header] = value;
+    }
+    getHeaders() {
+        return { ...this.#headers };
+    }
+}
+export default Frame;
+//# sourceMappingURL=frame.js.map

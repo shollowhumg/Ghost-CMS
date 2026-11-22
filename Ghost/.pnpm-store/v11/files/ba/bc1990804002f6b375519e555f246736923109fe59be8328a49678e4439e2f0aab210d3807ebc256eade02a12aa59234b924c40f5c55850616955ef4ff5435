@@ -1,0 +1,27 @@
+import type * as Identity from '../../../../identity/Types.js';
+import type * as Store from '../../../../Store.js';
+import type * as SignatureTypes from '../../Types.js';
+import type * as Types from '../Types.js';
+/**
+ * Creates a request-stage identity verifier for TAP agent-recognition signatures.
+ *
+ * TAP verifies trusted agent participation and request integrity. Consumer
+ * recognition and payment-container verification stay protocol-specific and
+ * are intentionally not inferred from this header-only verifier.
+ *
+ * @example
+ * ```ts
+ * const tap = Tap.Server.verifier({ keyResolver, nonceStore })
+ * mppx.charge({ amount: '1', identity: [tap] })
+ * ```
+ */
+export declare function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedRequest>;
+export declare namespace verifier {
+    type Config = {
+        /** Resolves a TAP-approved public key by its `keyid` and signature algorithm. */
+        keyResolver: SignatureTypes.KeyResolver;
+        /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
+        nonceStore: Store.AtomicStore;
+    };
+}
+//# sourceMappingURL=index.d.ts.map

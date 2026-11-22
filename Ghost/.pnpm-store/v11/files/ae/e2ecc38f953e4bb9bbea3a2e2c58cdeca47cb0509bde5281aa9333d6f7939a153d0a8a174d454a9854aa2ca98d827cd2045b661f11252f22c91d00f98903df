@@ -1,0 +1,1 @@
+{"version":3,"file":"paths.d.ts","sourceRoot":"","sources":["../../src/bridge/paths.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,CAAC,EAAE,MAAM,KAAK,CAAC;AAIxB;;;GAGG;AACH,eAAO,MAAM,mBAAmB,OAAO,CAAC;AAiBxC,eAAO,MAAM,aAAa,4NAKwE,CAAC;AAEnG,MAAM,MAAM,OAAO,GAAG,CAAC,CAAC,MAAM,CAAC,OAAO,aAAa,CAAC,CAAC;AAErD,uDAAuD;AACvD,eAAO,MAAM,cAAc;;;EAA0D,CAAC"}

@@ -1,0 +1,185 @@
+/**
+ * The rules every field of a shape follows, whatever its type and settings, and the rules a field
+ * adds from its settings when a held value is read.
+ *
+ * A shape's rules look only at structure: they know a list is a list of strings, but not which
+ * strings a field offers. They also say what a write does to a held value, which is part of the
+ * API's contract rather than storage's choice: a client works out a write against the value its
+ * form loaded, and Ghost applies it to whatever is stored when it lands, which another writer may
+ * have changed in between. The two only agree because both read the rules here.
+ *
+ * Each table is keyed by shape, so a shape added to the catalog fails to compile here until it has
+ * an entry. Each translator of a shape into another domain's terms, such as the storage translator
+ * into rows or the CSV translator into cells, keeps its own table of the same form, which `shaped`
+ * lets it index without a cast.
+ *
+ * Zod-free, like `./structure`, so Portal can use it. The strict rule a write must meet is built
+ * from zod and lives in `./index` as `accept`.
+ */
+import { type FieldOfShape, type FieldShape, type FieldType, type FieldTypeOfShape, type Leaf, type LeafKind, type LeafValues, type TypedSettings, type ValueOf, type WriteOf } from './structure.js';
+/** A leaf's value of any kind. */
+export type AnyLeafValue = LeafValues[LeafKind];
+/**
+ * What a value of each JSON kind is. Primitives only: the shape rules compare two leaf values with
+ * `===`, which a kind holding objects would break.
+ */
+interface KindValues {
+    string: string;
+    number: number;
+    boolean: boolean;
+}
+/** The JSON kind a value comes in. */
+type KindOf<V> = {
+    [K in keyof KindValues]: V extends KindValues[K] ? K : never;
+}[keyof KindValues];
+/**
+ * The JSON kinds the catalog's leaves' values come in, which is all that tells two leaves' values
+ * apart without their field: how storage picks a value's column, and a filter what to compare it
+ * in. Read from the leaves, so a leaf kind whose value is a new JSON kind widens it.
+ */
+export type ValueKind = KindOf<AnyLeafValue>;
+/** The leaf values of one JSON kind. */
+export type ValueOfKind<K extends ValueKind> = Extract<AnyLeafValue, KindValues[K]>;
+/**
+ * What the domain knows about each kind of leaf beyond its rule, which needs zod and is
+ * `LEAF_RULES` in `./index`. Keyed by kind, so a kind added to the catalog fails to compile here
+ * until it says each.
+ */
+interface LeafKindRules<K extends LeafKind> {
+    /** The JSON kind its value comes in. */
+    readonly kind: KindOf<LeafValues[K]>;
+    /** A raw value read as this leaf's value, or undefined when it holds none. */
+    read(raw: unknown): LeafValues[K] | undefined;
+    /**
+     * Text, as a form's input or a CSV cell holds it, read as this leaf's value, or the text itself
+     * where it holds none, so the leaf's rule refuses it rather than it being dropped. Writing a
+     * value as text is `String` for every kind.
+     */
+    fromText(text: string): LeafValues[K] | string;
+}
+/**
+ * What a value of each shape holds: whatever a type of that shape holds, read from the catalog, so a
+ * type's parts and leaves are typed the same way here. A value always holds something: a field
+ * holding nothing has no value at all, rather than an empty one, so `0` and an answer left blank are
+ * never confused. A record holds at least one part, and a set at least one option.
+ */
+export type ShapeValue = {
+    [S in FieldShape]: ValueOf<FieldTypeOfShape<S>>;
+};
+/** What a write to a field of each shape gives, from the catalog in the same way; see `WriteOf`. */
+export type ShapeWrite = {
+    [S in FieldShape]: WriteOf<FieldTypeOfShape<S>>;
+};
+export interface ShapeRules<S extends FieldShape> {
+    /**
+     * What `raw` holds as a value of `type`, or undefined when it holds nothing of it. Lenient: a part
+     * the type doesn't declare, or one of another kind than its leaf, is left out.
+     */
+    parse(type: FieldTypeOfShape<S>, raw: unknown): ShapeValue[S] | undefined;
+    /** Whether two values hold the same, which a write that changes nothing leaves alone. */
+    same(a: ShapeValue[S], b: ShapeValue[S]): boolean;
+    /** What a write does to what is held, which is nothing when a record's write clears every part. */
+    apply(held: ShapeValue[S] | undefined, write: ShapeWrite[S]): ShapeValue[S] | undefined;
+    /**
+     * The smallest write that turns `held` into `next`: `null` when `next` holds nothing, and
+     * undefined when the two hold the same.
+     */
+    diff(held: ShapeValue[S] | undefined, next: ShapeValue[S] | undefined): ShapeWrite[S] | null | undefined;
+}
+export declare const LEAVES: {
+    readonly [K in LeafKind]: LeafKindRules<K>;
+};
+/** Each shape's rules. A shape added to the catalog without rules doesn't compile. */
+export declare const SHAPES: {
+    readonly [S in FieldShape]: ShapeRules<S>;
+};
+/**
+ * A field together with its shape, as one of a union with a member per shape. Indexing a table
+ * keyed by shape with `shape` gives the entry for the same shape that `field` has, so a translator
+ * such as the storage translator can call its entry for a field without a cast or a branch per
+ * shape.
+ */
+export type ShapedField<F extends TypedSettings = TypedSettings, S extends FieldShape = FieldShape> = {
+    [K in S]: {
+        readonly shape: K;
+        readonly field: FieldOfShape<K, F>;
+    };
+}[S];
+/** A field paired with its shape: the one place a field's union is branched on by shape. */
+export declare function shaped<F extends TypedSettings>(field: F): ShapedField<F>;
+/**
+ * A type together with its shape, for a translator that knows a field's type but not its settings,
+ * as the CSV translator does.
+ */
+export type ShapedType<S extends FieldShape = FieldShape> = {
+    [K in S]: {
+        readonly shape: K;
+        readonly type: FieldTypeOfShape<K>;
+    };
+}[S];
+/** A type paired with its shape. */
+export declare function shapedType(type: FieldType): ShapedType;
+/** How a field of each shape reads a held value, using its type and settings. */
+export interface FieldReading<S extends FieldShape> {
+    /**
+     * Lenient: what a field holds, read as the field gives it meaning. Keeps answers to options
+     * since removed, and parts saved under an older, looser rule, so tightening a rule never hides
+     * what members hold. Puts a list's answers in the field's order, then the removed ones.
+     */
+    held(field: FieldOfShape<S>, value: ShapeValue[S]): ShapeValue[S] | undefined;
+    /**
+     * What a form can show of a held value. A save that writes what the form shows drops an answer
+     * the form can't show.
+     */
+    editable(field: FieldOfShape<S>, held: ShapeValue[S]): ShapeValue[S] | undefined;
+}
+export declare const FIELD_READING: {
+    readonly [S in FieldShape]: FieldReading<S>;
+};
+/**
+ * What a held raw value reads as for its field: its structure checked, then read as the field
+ * gives it meaning. Undefined when the value isn't the field's structure.
+ */
+export declare function heldValue<S extends FieldShape>({ shape, field }: ShapedField<TypedSettings, S>, raw: unknown): ShapeValue[S] | undefined;
+/** What a form can show of a held raw value, or undefined when it shows nothing. */
+export declare function editableValue<S extends FieldShape>(of: ShapedField<TypedSettings, S>, raw: unknown): ShapeValue[S] | undefined;
+/** A leaf's value as text gives it, or undefined for blank text, which holds nothing. */
+export declare const leafFromText: (leaf: Leaf, text: string) => AnyLeafValue | undefined;
+/**
+ * What a value given as text holds, such as a form's inputs or a row's cells: each leaf read from
+ * its text, then parsed as a value of its type, which drops blank text. Undefined when it holds
+ * nothing.
+ */
+export declare function valueFromText<S extends FieldShape>({ shape, type }: ShapedType<S>, raw: unknown): ShapeValue[S] | undefined;
+/** A value of each shape as a form's inputs hold it: each leaf as its text. */
+export interface ShapeText {
+    scalar: string;
+    record: {
+        readonly [part: string]: string;
+    };
+    set: string[];
+}
+/** A value as a form's inputs hold it, which `valueFromText` reads back as the same value. */
+export declare function textOfValue<S extends FieldShape>(shape: S, value: ShapeValue[S]): ShapeText[S];
+/** What a field holds, each leaf as its text, as a field shown but not edited draws it. */
+export declare function heldTextOf<S extends FieldShape>(of: ShapedField<TypedSettings, S>, held: unknown): ShapeText[S] | undefined;
+/**
+ * What a form's inputs start from for a held raw value: what the form can show of it, each leaf as
+ * its text, or undefined when it shows nothing.
+ */
+export declare function formTextOf<S extends FieldShape>(of: ShapedField<TypedSettings, S>, held: unknown): ShapeText[S] | undefined;
+/**
+ * What a form's inputs show, read as the field reads a value: each leaf from its text, blank text
+ * holding nothing, and only what the form can show. Undefined when they show nothing.
+ */
+export declare function formShows<S extends FieldShape>(of: ShapedField<TypedSettings, S>, inputs: unknown): ShapeValue[S] | undefined;
+/**
+ * The write that turns what a field holds into what a form's inputs show: `null` when the inputs
+ * show nothing of a replacing shape, and undefined when they show what the field holds. The held
+ * value is read as the field reads it first, so a part the form doesn't draw is never written, and
+ * an answer the form can't show, such as one to an option the field no longer offers, is cleared
+ * by the write.
+ */
+export declare function formWrite<S extends FieldShape>(of: ShapedField<TypedSettings, S>, inputs: unknown, held: unknown): ShapeWrite[S] | null | undefined;
+export {};
+//# sourceMappingURL=shapes.d.ts.map

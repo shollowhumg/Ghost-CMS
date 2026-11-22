@@ -1,0 +1,261 @@
+import { ChannelClosedError } from '../../../Errors.js';
+import * as ChannelStore from './ChannelStore.js';
+/** Lease duration for abandoned stream reservations. Active generators renew it. */
+export const streamReservationLeaseMs = 30_000;
+/** Atomically reserves shared voucher coverage before billable stream work begins. */
+export async function reserveChargeOrWait(options) {
+    const { amount, channelId, emit, formatNeedVoucher, pollIntervalMs, reservationId, signal, store, } = options;
+    if (amount < 0n)
+        throw new Error('stream charge must be non-negative');
+    if (store.atomic === false)
+        throw new Error('stream reservations require an atomic store');
+    let lastRequired;
+    while (true) {
+        throwIfAborted(signal);
+        let channel = await store.getChannel(channelId);
+        if (!channel)
+            throw new Error('channel not found');
+        throwIfChannelClosed(channel);
+        if (options.requireExisting &&
+            (channel.streamReservations?.[reservationId]?.expiresAt ?? 0) <= Date.now())
+            throw new Error('stream reservation was lost');
+        if (channel.highestVoucherAmount - channel.spent - ChannelStore.reservedStreamAmount(channel) >=
+            amount) {
+            let reserved = false;
+            channel = await store.updateChannel(channelId, (current) => {
+                reserved = false;
+                if (!current)
+                    return current;
+                throwIfChannelClosed(current);
+                throwIfAborted(signal);
+                const now = Date.now();
+                const previous = current.streamReservations?.[reservationId];
+                if (options.requireExisting && !previous)
+                    throw new Error('stream reservation was lost');
+                if (previous && previous.expiresAt <= now)
+                    throw new Error('stream reservation expired');
+                if (current.highestVoucherAmount -
+                    current.spent -
+                    ChannelStore.reservedStreamAmount(current) <
+                    amount)
+                    return current;
+                const reservations = Object.fromEntries(Object.entries(current.streamReservations ?? {}).filter(([, item]) => item.expiresAt > now));
+                reserved = true;
+                return {
+                    ...current,
+                    streamReservations: {
+                        ...reservations,
+                        [reservationId]: {
+                            amount: (previous?.amount ?? 0n) + amount,
+                            units: (previous?.units ?? 0) + 1,
+                            expiresAt: now + streamReservationLeaseMs,
+                        },
+                    },
+                };
+            });
+            if (reserved)
+                return;
+            if (!channel)
+                throw new Error('channel not found');
+        }
+        const required = channel.spent + ChannelStore.reservedStreamAmount(channel) + amount;
+        if (required !== lastRequired) {
+            lastRequired = required;
+            await emit(formatNeedVoucher({
+                channelId,
+                requiredCumulative: required.toString(),
+                acceptedCumulative: channel.highestVoucherAmount.toString(),
+                deposit: channel.deposit.toString(),
+            }));
+        }
+        await waitForUpdate(store, channelId, pollIntervalMs, signal);
+    }
+}
+/** Commits only this stream's live reservation, removing it in the same atomic update. */
+export async function commitReservedCharges(options) {
+    const { channelId, reservationId, store } = options;
+    let committed = false;
+    const channel = await store.updateChannel(channelId, (current) => {
+        committed = false;
+        if (!current)
+            return current;
+        throwIfChannelClosed(current);
+        const reservation = current.streamReservations?.[reservationId];
+        if (!reservation)
+            return current;
+        if (reservation.expiresAt <= Date.now())
+            throw new Error('stream reservation expired');
+        if (current.highestVoucherAmount - current.spent < reservation.amount)
+            throw new Error('reserved voucher coverage is no longer available');
+        const { [reservationId]: _, ...remaining } = current.streamReservations;
+        committed = true;
+        return {
+            ...current,
+            streamReservations: remaining,
+            spent: current.spent + reservation.amount,
+            units: current.units + reservation.units,
+        };
+    });
+    if (!channel)
+        throw new Error('channel not found');
+    return committed ? channel : undefined;
+}
+/** Releases only the unused reservation owned by this stream. */
+export async function releaseReservedCharges({ store, channelId, reservationId, }) {
+    await store.updateChannel(channelId, (current) => {
+        if (!current?.streamReservations?.[reservationId])
+            return current;
+        const { [reservationId]: _, ...remaining } = current.streamReservations;
+        return { ...current, streamReservations: remaining };
+    });
+}
+/** Renews a live reservation without reviving an expired or released lease. */
+export async function renewReservedCharges({ store, channelId, reservationId, }) {
+    await store.updateChannel(channelId, (current) => {
+        if (!current)
+            throw new Error('channel not found');
+        throwIfChannelClosed(current);
+        const reservation = current.streamReservations?.[reservationId];
+        if (!reservation)
+            return current;
+        if (reservation.expiresAt <= Date.now())
+            throw new Error('stream reservation expired');
+        return {
+            ...current,
+            streamReservations: {
+                ...current.streamReservations,
+                [reservationId]: { ...reservation, expiresAt: Date.now() + streamReservationLeaseMs },
+            },
+        };
+    });
+}
+/** Throws when a channel can no longer be used for streaming charges. */
+export function throwIfChannelClosed(channel) {
+    if (channel.finalized)
+        throw new ChannelClosedError({ reason: 'channel is finalized' });
+    if (channel.closeRequestedAt !== 0n)
+        throw new ChannelClosedError({ reason: 'channel has a pending close request' });
+}
+async function waitForUpdate(store, channelId, pollIntervalMs, signal) {
+    throwIfAborted(signal);
+    if (store.waitForUpdate) {
+        const controller = new AbortController();
+        const onAbort = () => controller.abort(signal?.reason);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        try {
+            await Promise.race([
+                store.waitForUpdate(channelId, controller.signal),
+                sleep(pollIntervalMs, controller.signal),
+            ]);
+        }
+        finally {
+            signal?.removeEventListener('abort', onAbort);
+            controller.abort();
+        }
+    }
+    else {
+        await sleep(pollIntervalMs, signal);
+    }
+    throwIfAborted(signal);
+}
+function sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timeout);
+            reject(signal?.reason ?? new Error('aborted'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+function throwIfAborted(signal) {
+    if (signal?.aborted)
+        throw signal.reason ?? new Error('aborted');
+}
+/** Raised after a socket is closed to keep its outbound queue bounded. */
+export class WebSocketOutboundBufferLimitError extends Error {
+    name = 'WebSocketOutboundBufferLimitError';
+}
+/** Subscribes to browser or Node-style socket events and returns an unsubscribe callback. */
+export function subscribe(socket, handlers) {
+    if (socket.addEventListener && socket.removeEventListener) {
+        const onMessage = (event) => handlers.message('data' in event ? event.data : undefined);
+        socket.addEventListener('message', onMessage);
+        socket.addEventListener('close', handlers.close);
+        socket.addEventListener('error', handlers.error);
+        return () => {
+            socket.removeEventListener?.('message', onMessage);
+            socket.removeEventListener?.('close', handlers.close);
+            socket.removeEventListener?.('error', handlers.error);
+        };
+    }
+    if (socket.on && socket.off) {
+        const onMessage = (data) => handlers.message(data);
+        socket.on('message', onMessage);
+        socket.on('close', handlers.close);
+        socket.on('error', handlers.error);
+        return () => {
+            socket.off?.('message', onMessage);
+            socket.off?.('close', handlers.close);
+            socket.off?.('error', handlers.error);
+        };
+    }
+    throw new Error('unsupported websocket implementation');
+}
+const socketSendQueues = new WeakMap();
+/** Sends a text frame while bounding runtime-managed outbound buffering. */
+export async function send(socket, data, options = {}) {
+    const previous = socketSendQueues.get(socket) ?? Promise.resolve();
+    const current = previous
+        .catch(() => { })
+        .then(async () => {
+        const maxBufferedAmount = options.maxBufferedAmount ?? 1024 * 1024;
+        if ((socket.bufferedAmount ?? 0) + textByteLength(data) > maxBufferedAmount) {
+            try {
+                await Promise.resolve(socket.close(4008, 'outbound buffer limit exceeded'));
+            }
+            catch { }
+            throw new WebSocketOutboundBufferLimitError('websocket outbound buffer limit exceeded');
+        }
+        await Promise.resolve(socket.send(data));
+    });
+    socketSendQueues.set(socket, current);
+    try {
+        await current;
+    }
+    finally {
+        if (socketSendQueues.get(socket) === current)
+            socketSendQueues.delete(socket);
+    }
+}
+function textByteLength(value) {
+    let bytes = 0;
+    for (let index = 0; index < value.length; index++) {
+        const codePoint = value.codePointAt(index);
+        if (codePoint <= 0x7f)
+            bytes += 1;
+        else if (codePoint <= 0x7ff)
+            bytes += 2;
+        else if (codePoint <= 0xffff)
+            bytes += 3;
+        else {
+            bytes += 4;
+            index += 1;
+        }
+    }
+    return bytes;
+}
+/** Converts socket message payloads into text frames when possible. */
+export function toText(value) {
+    if (typeof value === 'string')
+        return value;
+    if (value instanceof ArrayBuffer)
+        return new TextDecoder().decode(value);
+    if (ArrayBuffer.isView(value))
+        return new TextDecoder().decode(value);
+    return null;
+}
+//# sourceMappingURL=Transports.js.map

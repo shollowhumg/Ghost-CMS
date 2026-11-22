@@ -1,0 +1,66 @@
+{
+  "name": "express-hbs",
+  "version": "4.1.0",
+  "description": "Express handlebars template engine complete with multiple layouts, partials and blocks.",
+  "keywords": [
+    "express4",
+    "express",
+    "handlebars",
+    "layout",
+    "partials"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "directories": {
+    "example": "example"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TryGhost/express-hbs"
+  },
+  "bugs": "https://github.com/TryGhost/express-hbs/issues",
+  "author": "Mario Gutierrez <mario@barc.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@tryghost/pro-ship": "2.0.4",
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.6",
+    "cookie-parser": "1.4.7",
+    "express": "5.3.0",
+    "i18n": "0.15.4",
+    "mocha": "12.0.3",
+    "nyc": "18.0.0",
+    "oxfmt": "0.76.0",
+    "oxlint": "1.91.0",
+    "rewire": "9.0.1",
+    "supertest": "7.3.2",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "handlebars": "^4.7.10",
+    "lodash": "^4.18.1",
+    "readdirp": "^3.6.0"
+  },
+  "optionalDependencies": {
+    "js-beautify": "^2.0.0"
+  },
+  "scripts": {
+    "lint": "oxlint --quiet && oxfmt --check . && pnpm lint:types",
+    "lint:types": "tsc -p test/types",
+    "lint:fix": "oxlint --fix && oxfmt .",
+    "format": "oxfmt .",
+    "test": "mocha",
+    "posttest": "pnpm lint",
+    "coverage": "nyc --check-coverage mocha",
+    "preship": "pnpm test",
+    "ship": "pro-ship"
+  }
+}

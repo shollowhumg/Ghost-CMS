@@ -1,0 +1,12 @@
+/** Expected adapter rejection. The code and diagnostics are the only public data. */
+export class UpgradeAdapterError extends Error {
+    code;
+    diagnostics;
+    constructor({ code, diagnostics, }) {
+        super(code);
+        this.name = 'UpgradeAdapterError';
+        this.code = code;
+        this.diagnostics = diagnostics;
+    }
+}
+//# sourceMappingURL=errors.js.map

@@ -1,0 +1,105 @@
+import type * as Store from '../../Store.js';
+/** Options for replaying paid proxy deliveries. */
+export type Options = {
+    /**
+     * Upstream attempts per credential, including the first, before a retry gets `502`.
+     * A retry after a failed delivery (an upstream error, a 5xx or a body that broke
+     * off) sends the paid request upstream again without charging, so a
+     * non-idempotent upstream may run the operation twice; set `1` to only ever
+     * replay a recorded response. @default 3
+     */
+    maxAttempts?: number | undefined;
+    /** Largest response body, in bytes, kept for replay. Larger or streamed bodies are delivered but not kept. @default 1_048_576 */
+    maxBodySize?: number | undefined;
+    /** Largest request body, in bytes, a paid request may carry; larger ones get `413`. @default 1_048_576 */
+    maxRequestBodySize?: number | undefined;
+    /** `Retry-After` seconds returned while a delivery is still in flight. @default 5 */
+    retryAfter?: number | undefined;
+    /** Atomic store shared by every proxy instance that may receive a retry. */
+    store: Store.AtomicStore;
+    /**
+     * How long to wait for the upstream to start responding, and how long its outcome is kept after it is
+     * recorded, in milliseconds. Expired records are removed when they are next
+     * looked up, as with mppx's replay markers; give the backing store its own
+     * key expiry to reclaim records nobody retries. @default 900_000
+     */
+    ttl?: number | undefined;
+    /** Keeps background work alive after the response returns, such as Cloudflare's `ctx.waitUntil`. */
+    waitUntil?: ((promise: Promise<unknown>) => void) | undefined;
+};
+/** Replay options with defaults applied. */
+export type Resolved = {
+    maxAttempts: number;
+    maxBodySize: number;
+    maxRequestBodySize: number;
+    retryAfter: number;
+    store: Store.AtomicStore;
+    ttl: number;
+    waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+};
+/** A delivery record, keyed by credential and request. */
+export type Record = {
+    attempts: number;
+    expires: number;
+    receipt: string | null;
+    requestHeaders: [string, string][];
+    status: 'pending';
+} | {
+    attempts: number;
+    expires: number;
+    receipt: string | null;
+    requestHeaders: [string, string][];
+    status: 'failed';
+} | {
+    expires: number;
+    status: 'delivered';
+} | {
+    body: string;
+    expires: number;
+    headers: [string, string][];
+    responseStatus: number;
+    status: 'complete';
+    statusText: string;
+};
+/** Applies defaults to replay options. */
+export declare function resolve(options: Options): Resolved;
+/** Returns the request's Payment credential header value, if it carries one. */
+export declare function credentialOf(request: Request, headerNames?: readonly string[]): string | undefined;
+/** Reads a request body, or returns null when it is larger than maxRequestBodySize. */
+export declare function readBody(request: Request, maxRequestBodySize: number): Promise<Uint8Array<ArrayBuffer> | null>;
+/** Derives the replay key from the credential and the exact request (origin, path, query, method, body) it paid for. */
+export declare function key(parameters: {
+    body: Uint8Array;
+    credential: string;
+    method: string;
+    target: string;
+}): string;
+/** Rebuilds a request around an already-read body, optionally with another abort signal. */
+export declare function withBody(request: Request, body: Uint8Array, signal?: AbortSignal, headers?: HeadersInit): Request;
+/** What a request with a known credential should do. */
+export type Lookup = {
+    type: 'none';
+} | {
+    response: Response;
+    type: 'respond';
+} | {
+    attempts: number;
+    receipt: string | null;
+    requestHeaders: [string, string][];
+    type: 'retry';
+};
+/** Looks up a delivery and, for a failed one, claims the next upstream attempt. */
+export declare function lookup(replay: Resolved, replayKey: string): Promise<Lookup>;
+/** Runs a paid upstream delivery detached from the client and records its outcome. */
+export declare function deliver(parameters: {
+    applyReceipt: (response: Response) => Response | Promise<Response>;
+    attempts: number;
+    replay: Resolved;
+    replayKey: string;
+    /** The upstream headers of the paid request; a retried delivery reuses them. */
+    requestHeaders: [string, string][];
+    run: (signal: AbortSignal) => Promise<Response>;
+}): Promise<Response>;
+/** Adds a stored receipt to a response built for a retried delivery. */
+export declare function withReceiptHeader(response: Response, receipt: string | null): Response;
+//# sourceMappingURL=Replay.d.ts.map

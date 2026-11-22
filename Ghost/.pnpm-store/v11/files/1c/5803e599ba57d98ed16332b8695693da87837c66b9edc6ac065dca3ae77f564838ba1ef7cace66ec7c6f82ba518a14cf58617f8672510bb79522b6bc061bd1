@@ -1,0 +1,52 @@
+import { Address } from 'ox';
+import type * as Store from '../../../Store.js';
+import type { SessionCredentialPayload } from '../precompile/Protocol.js';
+/**
+ * Sponsored opens, and separately sponsored top-ups, each verified payer may make per UTC day. It is
+ * tempoxyz/mpp-proxy's `DAILY_CHANNEL_OPEN_LIMIT`, the limit its proxy applied to sponsored channel
+ * opens before the limit moved into mppx.
+ */
+export declare const defaultPerDay = 5;
+/** Limits on fee-payer-sponsored channel opens and top-ups. */
+export type Parameters = {
+    /** Atomic store holding one usage record per payer and chain. */
+    store: Store.AtomicStore;
+    /** Sponsored opens, and separately sponsored top-ups, per payer per UTC day. @default 5 */
+    perDay?: number | undefined;
+};
+/** Validates a configured limit. */
+export declare function assertParameters(parameters: Parameters | undefined): void;
+/**
+ * Returns the verified signer of a serialized Tempo transaction, lowercased, or null. A
+ * credential's `source` is client-supplied and unverified at this point, and so are the 0x78
+ * explicit sender slot and a keychain signature's account, so limits key on what the signatures
+ * prove:
+ * - a direct signature: its signer;
+ * - an access key authorized in the same transaction: the account that signed the authorization,
+ *   so fresh keys do not get a fresh quota;
+ * - an access key authorized earlier: the key itself (its account link is only checked on chain).
+ */
+export declare function verifiedPayer(serializedTransaction: string): Address.Address | null;
+/**
+ * Records one sponsored `action` for `payer` on the current UTC day. Returns false, recording
+ * nothing, once the payer has used `perDay` of them.
+ */
+export declare function reserve(store: Store.AtomicStore, parameters: {
+    action: 'open' | 'topUp';
+    chainId: number;
+    payer: string;
+    perDay?: number | undefined;
+    now?: Date | undefined;
+}): Promise<boolean>;
+/**
+ * Returns `feePayer` when the credential's open or top-up may be sponsored, and `undefined` once
+ * its verified payer used the day's sponsored transactions, or when no signature proves a payer.
+ * The transaction is then broadcast as the payer signed it, paying its own fees.
+ */
+export declare function limitFeePayer<feePayer>(parameters: {
+    chainId: number;
+    feePayer: feePayer | undefined;
+    limit: Parameters | undefined;
+    payload: SessionCredentialPayload;
+}): Promise<feePayer | undefined>;
+//# sourceMappingURL=SponsorshipLimit.d.ts.map

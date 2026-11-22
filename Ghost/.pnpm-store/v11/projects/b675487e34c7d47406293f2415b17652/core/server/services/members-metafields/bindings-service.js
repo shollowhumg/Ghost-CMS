@@ -1,0 +1,225 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MetafieldBindingsService = void 0;
+const bson_objectid_1 = __importDefault(require("bson-objectid"));
+const logging_1 = __importDefault(require("@tryghost/logging"));
+const zod_1 = require("zod");
+const structure_1 = require("@tryghost/metafield-types/structure");
+const identity_1 = require("@tryghost/metafield-types/identity");
+const access_1 = require("./access");
+const queries_1 = require("./queries");
+const schema_1 = require("./schema");
+const ensure_transaction_1 = require("../../lib/ensure-transaction");
+const BINDINGS_TABLE = 'members_metafield_bindings';
+/**
+ * Where a source sends what it collected: a `port` is the name that source uses for a
+ * thing, and the binding resolves it to one of the publisher's fields.
+ */
+class MetafieldBindingsService {
+    knex;
+    fields;
+    values;
+    constructor({ knex, fields, values, }) {
+        this.knex = knex;
+        this.fields = fields;
+        this.values = values;
+    }
+    /**
+     * Points a port at a field, in place of whichever field the port wrote into before, and returns
+     * the binding's id. Given a transaction as `executor` it joins that transaction; given a plain
+     * connection it opens its own.
+     */
+    async bind(port, field, now, executor = this.knex) {
+        return (0, ensure_transaction_1.ensureTransaction)(executor, async (trx) => {
+            const existing = await trx(BINDINGS_TABLE).where({ port }).first();
+            if (existing?.metafield_namespace === field.namespace &&
+                existing.metafield_key === field.key) {
+                await trx(BINDINGS_TABLE).where('id', existing.id).update({ updated_at: now });
+                return existing.id;
+            }
+            if (existing) {
+                await trx(BINDINGS_TABLE).where('id', existing.id).del();
+            }
+            const bindingId = new bson_objectid_1.default().toHexString();
+            await trx(BINDINGS_TABLE).insert({
+                id: bindingId,
+                port,
+                ...(0, queries_1.fieldReference)(field),
+                created_at: now,
+                updated_at: now,
+            });
+            return bindingId;
+        });
+    }
+    /**
+     * Each of these ports that writes into a field, whatever that field's status, with the field
+     * it names, such as `custom.delivery_address`, or null when it names none. A port names its
+     * field while that field is active and open to members, as that's when a member can read what
+     * they hold there: a field kept from members isn't theirs to know of, and an archived one holds
+     * nothing they can read. Deleting a field deletes its bindings, so a port bound here always has
+     * one.
+     */
+    async boundPorts(ports, executor = this.knex) {
+        if (!ports.length) {
+            return new Map();
+        }
+        const binding = zod_1.z
+            .array(zod_1.z.string())
+            .parse(await executor(BINDINGS_TABLE).whereIn('port', ports).pluck('port'));
+        const bound = new Map(binding.map((port) => [port, null]));
+        // Read the way a member's own reads ask for fields, so a port names exactly the fields their
+        // record holds values for.
+        const named = await this.fields
+            .definitions(executor, { audience: access_1.MEMBERS, status: queries_1.ACTIVE_ONLY })
+            .read.join(BINDINGS_TABLE, (0, queries_1.onField)(queries_1.FIELDS_TABLE, BINDINGS_TABLE))
+            .whereIn(`${BINDINGS_TABLE}.port`, ports)
+            .select(`${BINDINGS_TABLE}.port`, `${queries_1.FIELDS_TABLE}.namespace`, `${queries_1.FIELDS_TABLE}.key`);
+        for (const row of named) {
+            const read = schema_1.DbNamedBinding.safeParse(row);
+            if (read.success) {
+                bound.set(read.data.port, identityOf(read.data));
+            }
+        }
+        return bound;
+    }
+    /** Whether any port writes into this field. */
+    async isBound(field, executor = this.knex) {
+        return (await executor(BINDINGS_TABLE).where((0, queries_1.fieldReference)(field)).first('id')) !== undefined;
+    }
+    /**
+     * Stops the writing. Whatever hangs off the binding cascades with it. Given a transaction as
+     * `executor` it joins that transaction; given a plain connection it opens its own.
+     */
+    async remove(port, executor = this.knex) {
+        await (0, ensure_transaction_1.ensureTransaction)(executor, (trx) => trx(BINDINGS_TABLE).where({ port }).del());
+    }
+    /**
+     * Plans the values a source sent through ports into the fields they write into, writing
+     * nothing, for whoever saves them.
+     *
+     * Every source shares the same rules. Each value replaces what its field holds, as `whole`
+     * says. A value for a port bound nowhere, or into an archived field, is dropped. The binding
+     * admits the rest, whoever sent them: a port exists because a publisher pointed it at a field,
+     * and that decision is what admits a value, rather than who is looking. The values accepted are
+     * planned whatever is refused of the others, as they have nothing to do with each other beyond
+     * arriving together, and every refusal comes back, named by its port, for the caller to act on:
+     * a checkout webhook has already taken the money, so saves what it can, while a member giving
+     * answers is owed every refusal before anything changes. Where two values land in one field, the
+     * last of them is what the field holds.
+     *
+     * What is recorded against the values is the writer. For a checkout, nobody supplied them in a
+     * sense the site can name, so each is recorded against the binding that routed it, which
+     * resolves back to what it was collected as and the field it landed in. A member typing their
+     * own address is answerable for it in a way no routing is, so their values are theirs.
+     */
+    async planThrough(values, writer, executor = this.knex) {
+        const fields = await this.fieldsFor(executor, values.map(({ port }) => port));
+        const input = {};
+        const routed = new Map();
+        for (const { port, value } of values) {
+            const field = fields.get(port);
+            if (field) {
+                input[identityOf(field)] = whole(field.type, value);
+                routed.set(identityOf(field), { port, field });
+            }
+        }
+        const kept = new Set(fields.keys());
+        if (routed.size === 0) {
+            return { plans: [], refused: [], kept };
+        }
+        const { writes, refusals } = await this.values.planOrRefuse(input, access_1.INTERNAL, 
+        // Every value planned came through a port, so each refusal names one.
+        (identity) => routed.get(identity)?.port ?? identity, executor);
+        // One plan for each writer, so a member's answers are one change and each binding's value is
+        // its own.
+        const plans = new Map();
+        for (const write of writes) {
+            const field = routed.get(identityOf(write.field))?.field;
+            if (!field) {
+                continue;
+            }
+            const origin = originOf(writer, field);
+            const key = JSON.stringify(origin);
+            const plan = plans.get(key) ?? { writes: [], origin };
+            plan.writes.push(write);
+            plans.set(key, plan);
+        }
+        return { plans: [...plans.values()], refused: refusals, kept };
+    }
+    /**
+     * The field each of these ports writes into, by port, leaving out a port bound nowhere or into
+     * an archived field, as nothing can be saved into one there.
+     */
+    async fieldsFor(executor, ports) {
+        const fields = new Map();
+        if (!ports.length) {
+            return fields;
+        }
+        const rows = await executor(BINDINGS_TABLE)
+            .join(this.fields.table(executor), (0, queries_1.onField)(queries_1.FIELDS_TABLE, BINDINGS_TABLE))
+            .whereIn(`${BINDINGS_TABLE}.port`, ports)
+            // An archived field is still where a port points, and still not somewhere a value can
+            // land, so it's left out rather than waited for.
+            .where(`${queries_1.FIELDS_TABLE}.status`, schema_1.FIELD_STATUS.active)
+            .select(`${BINDINGS_TABLE}.port`, `${BINDINGS_TABLE}.id as binding_id`, `${queries_1.FIELDS_TABLE}.namespace`, `${queries_1.FIELDS_TABLE}.key`, `${queries_1.FIELDS_TABLE}.type`);
+        for (const row of rows) {
+            // Decoded rather than trusted: a join is a read boundary, and `type` is what decides
+            // how a value is read. Unreadable counts as unbound rather than throwing, so one bad row
+            // skips its port instead of failing every other value that came with it.
+            const bound = schema_1.DbBoundField.safeParse(row);
+            if (!bound.success) {
+                logging_1.default.warn({
+                    event: { name: 'members.metafields.binding_unreadable' },
+                    err: bound.error,
+                    port: row.port,
+                }, 'A binding could not be read');
+                continue;
+            }
+            fields.set(bound.data.port, {
+                bindingId: bound.data.binding_id,
+                namespace: bound.data.namespace,
+                key: bound.data.key,
+                type: bound.data.type,
+            });
+        }
+        return fields;
+    }
+}
+exports.MetafieldBindingsService = MetafieldBindingsService;
+/** A field's identity as text, such as `custom.delivery_address`. */
+function identityOf(field) {
+    return zod_1.z.encode(identity_1.IdentityTextSchema, { namespace: field.namespace, key: field.key, parts: [] });
+}
+/** Where a value was written, from who wrote it and the field it landed in. */
+function originOf(writer, field) {
+    return writer.type === 'binding'
+        ? { writtenBy: { type: 'binding', id: field.bindingId }, source: 'checkout' }
+        : { writtenBy: { type: 'member', id: writer.id }, source: 'portal' };
+}
+/**
+ * An answer as a whole value of its field's type, so it replaces what the field holds rather
+ * than merging into it, whoever collected it: a record names every part its type declares, one
+ * left out as `null`. Anything else is already whole, and a value that isn't a record is left for
+ * the field's rule to refuse.
+ */
+function whole(type, value) {
+    return (0, structure_1.matchShape)(type, {
+        scalar: () => value,
+        set: () => value,
+        record: ({ parts }) => {
+            if (!(0, structure_1.isRecordValue)(value)) {
+                return value;
+            }
+            const declared = Object.keys(parts);
+            // An answer holds something: one with no part to give is the empty record the field's
+            // rule refuses, rather than every part cleared.
+            if (!declared.some((part) => value[part] !== undefined && value[part] !== null)) {
+                return {};
+            }
+            return { ...Object.fromEntries(declared.map((part) => [part, null])), ...value };
+        },
+    });
+}

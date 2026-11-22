@@ -1,0 +1,69 @@
+{
+  "name": "@tryghost/metafield-types",
+  "version": "0.6.0",
+  "description": "Ghost member custom field types: which types exist, what each is made of, and how a value of each is validated",
+  "license": "MIT",
+  "author": "Ghost Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/Ghost.git",
+    "directory": "contracts/metafield-types"
+  },
+  "files": [
+    "build"
+  ],
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "imports": {
+    "#phone-lib": {
+      "source": {
+        "browser": "./src/phone-lib.ts",
+        "node": "./src/phone-lib.node.ts",
+        "default": "./src/phone-lib.ts"
+      },
+      "browser": "./build/phone-lib.js",
+      "node": "./build/phone-lib.node.js",
+      "default": "./build/phone-lib.js"
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./structure": {
+      "types": "./build/structure.d.ts",
+      "default": "./build/structure.js"
+    },
+    "./shapes": {
+      "types": "./build/shapes.d.ts",
+      "default": "./build/shapes.js"
+    },
+    "./identity": {
+      "types": "./build/identity.d.ts",
+      "default": "./build/identity.js"
+    },
+    "./countries": {
+      "types": "./build/countries.d.ts",
+      "default": "./build/countries.js"
+    },
+    "./phone": {
+      "types": "./build/phone.d.ts",
+      "default": "./build/phone.js"
+    }
+  },
+  "dependencies": {
+    "libphonenumber-js": "1.13.15",
+    "zod": "4.6.7"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test:unit": "NODE_ENV=testing vitest run --coverage",
+    "test": "pnpm run '/^test:/'",
+    "test:types": "tsc --noEmit -p test/tsconfig.json",
+    "lint:code": "eslint src/ --cache",
+    "lint:test": "eslint test/ --cache",
+    "lint": "pnpm run '/^lint:/'"
+  }
+}

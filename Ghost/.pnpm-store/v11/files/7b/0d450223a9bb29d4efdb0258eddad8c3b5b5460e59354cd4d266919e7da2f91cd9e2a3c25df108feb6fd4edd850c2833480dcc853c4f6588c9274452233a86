@@ -1,0 +1,359 @@
+import {
+  verifyTypedDataSignature
+} from "./chunk-5JE2UIZP.mjs";
+import {
+  PERMIT2_ADDRESS
+} from "./chunk-GPMYUGHX.mjs";
+
+// src/auth-capture/constants.ts
+import { getAddress, isAddress, isAddressEqual, keccak256, toBytes } from "viem";
+var AUTH_CAPTURE_SCHEME = "auth-capture";
+var AUTH_CAPTURE_ESCROW_V1_0_ADDRESS = "0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff";
+var EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS = "0x0E3dF9510de65469C4518D7843919c0b8C7A7757";
+var PERMIT2_TOKEN_COLLECTOR_V1_0_ADDRESS = "0x992476B9Ee81d52a5BdA0622C333938D0Af0aB26";
+var OPERATOR_REFUND_COLLECTOR_V1_0_ADDRESS = "0x934907bffd0901b6A21e398B9C53A4A38F02fa5d";
+var AUTH_CAPTURE_ESCROW_V1_1_ADDRESS = "0xf96815976523E00e65Be8f34cA5e64b4f41EB19c";
+var EIP3009_TOKEN_COLLECTOR_V1_1_ADDRESS = "0x8612dfdc421f80336cd14E8EF9cb1E765dB5ab88";
+var PERMIT2_TOKEN_COLLECTOR_V1_1_ADDRESS = "0xD69831Aed5bfe262067ec4c751f4F830EcdD446e";
+var OPERATOR_REFUND_COLLECTOR_V1_1_ADDRESS = "0x7a03443724d14798c4AB4622F1DAAcA761Fea486";
+var AUTH_CAPTURE_ESCROW_ADDRESS = AUTH_CAPTURE_ESCROW_V1_1_ADDRESS;
+var EIP3009_TOKEN_COLLECTOR_ADDRESS = EIP3009_TOKEN_COLLECTOR_V1_1_ADDRESS;
+var PERMIT2_TOKEN_COLLECTOR_ADDRESS = PERMIT2_TOKEN_COLLECTOR_V1_1_ADDRESS;
+var OPERATOR_REFUND_COLLECTOR_ADDRESS = OPERATOR_REFUND_COLLECTOR_V1_1_ADDRESS;
+var AUTH_CAPTURE_DEPLOYMENT_V1_0 = {
+  version: "v1.0",
+  escrow: AUTH_CAPTURE_ESCROW_V1_0_ADDRESS,
+  eip3009Collector: EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  permit2Collector: PERMIT2_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  operatorRefundCollector: OPERATOR_REFUND_COLLECTOR_V1_0_ADDRESS
+};
+var AUTH_CAPTURE_DEPLOYMENT_V1_1 = {
+  version: "v1.1",
+  escrow: AUTH_CAPTURE_ESCROW_V1_1_ADDRESS,
+  eip3009Collector: EIP3009_TOKEN_COLLECTOR_V1_1_ADDRESS,
+  permit2Collector: PERMIT2_TOKEN_COLLECTOR_V1_1_ADDRESS,
+  operatorRefundCollector: OPERATOR_REFUND_COLLECTOR_V1_1_ADDRESS
+};
+function resolveAuthCaptureDeployment(escrow) {
+  if (escrow === void 0 || escrow === "") {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_1;
+  }
+  if (!isAddress(escrow)) {
+    return void 0;
+  }
+  const normalized = getAddress(escrow);
+  if (isAddressEqual(normalized, AUTH_CAPTURE_ESCROW_V1_1_ADDRESS) || isAddressEqual(normalized, AUTH_CAPTURE_ESCROW_ADDRESS)) {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_1;
+  }
+  if (isAddressEqual(normalized, AUTH_CAPTURE_ESCROW_V1_0_ADDRESS)) {
+    return AUTH_CAPTURE_DEPLOYMENT_V1_0;
+  }
+  return void 0;
+}
+var DEFAULT_CUSTOM_OPERATOR_AUTHORIZE_GAS_LIMIT = 1000000n;
+var SALT_BINDING_TYPEHASH = keccak256(
+  toBytes(
+    "x402AuthCaptureSaltBinding(address receiverAuthorizer,address policy,uint256 saltNonce)"
+  )
+);
+var OPERATOR_EIP712_DOMAIN = {
+  name: "x402 Auth Capture Operator",
+  version: "1"
+};
+var RECEIVE_AUTHORIZATION_TYPES = {
+  ReceiveWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" }
+  ]
+};
+var PERMIT2_TRANSFER_FROM_TYPES = {
+  PermitTransferFrom: [
+    { name: "permitted", type: "TokenPermissions" },
+    { name: "spender", type: "address" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" }
+  ],
+  TokenPermissions: [
+    { name: "token", type: "address" },
+    { name: "amount", type: "uint256" }
+  ]
+};
+var CHARGE_TYPES_V1_0 = {
+  Charge: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorDataHash", type: "bytes32" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" }
+  ]
+};
+var CAPTURE_TYPES_V1_0 = {
+  Capture: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "feeBps", type: "uint16" },
+    { name: "feeReceiver", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+var CHARGE_TYPES_V1_1 = {
+  Charge: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "collectorDataHash", type: "bytes32" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" }
+  ]
+};
+var CAPTURE_TYPES_V1_1 = {
+  Capture: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "feeAmount", type: "uint256" },
+    { name: "feeReceiver", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+var VOID_TYPES = {
+  Void: [{ name: "paymentInfoHash", type: "bytes32" }]
+};
+var REFUND_TYPES = {
+  Refund: [
+    { name: "paymentInfoHash", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+    { name: "tokenCollector", type: "address" },
+    { name: "expectedCapturableAmount", type: "uint256" },
+    { name: "expectedRefundableAmount", type: "uint256" }
+  ]
+};
+function chargeTypesForDeployment(deployment) {
+  return deployment.version === "v1.0" ? CHARGE_TYPES_V1_0 : CHARGE_TYPES_V1_1;
+}
+function captureTypesForDeployment(deployment) {
+  return deployment.version === "v1.0" ? CAPTURE_TYPES_V1_0 : CAPTURE_TYPES_V1_1;
+}
+function feeAmountFromBps(amount, feeBps) {
+  return amount * BigInt(feeBps) / 10000n;
+}
+
+// src/auth-capture/nonce.ts
+import {
+  encodeAbiParameters,
+  getAddress as getAddress2,
+  isAddress as isAddress2,
+  isAddressEqual as isAddressEqual2,
+  keccak256 as keccak2562,
+  toHex,
+  zeroAddress
+} from "viem";
+var PAYMENT_INFO_TYPEHASH = keccak2562(
+  new TextEncoder().encode(
+    "PaymentInfo(address operator,address payer,address receiver,address token,uint120 maxAmount,uint48 preApprovalExpiry,uint48 authorizationExpiry,uint48 refundExpiry,uint16 minFeeBps,uint16 maxFeeBps,address feeReceiver,uint256 salt)"
+  )
+);
+function hashPaymentInfo(chainId, paymentInfo, payer, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  const paymentInfoEncoded = encodeAbiParameters(
+    [
+      { name: "typehash", type: "bytes32" },
+      { name: "operator", type: "address" },
+      { name: "payer", type: "address" },
+      { name: "receiver", type: "address" },
+      { name: "token", type: "address" },
+      { name: "maxAmount", type: "uint120" },
+      { name: "preApprovalExpiry", type: "uint48" },
+      { name: "authorizationExpiry", type: "uint48" },
+      { name: "refundExpiry", type: "uint48" },
+      { name: "minFeeBps", type: "uint16" },
+      { name: "maxFeeBps", type: "uint16" },
+      { name: "feeReceiver", type: "address" },
+      { name: "salt", type: "uint256" }
+    ],
+    [
+      PAYMENT_INFO_TYPEHASH,
+      paymentInfo.operator,
+      payer,
+      paymentInfo.receiver,
+      paymentInfo.token,
+      BigInt(paymentInfo.maxAmount),
+      paymentInfo.preApprovalExpiry,
+      paymentInfo.authorizationExpiry,
+      paymentInfo.refundExpiry,
+      paymentInfo.minFeeBps,
+      paymentInfo.maxFeeBps,
+      paymentInfo.feeReceiver,
+      BigInt(paymentInfo.salt)
+    ]
+  );
+  const paymentInfoHash = keccak2562(paymentInfoEncoded);
+  const outerEncoded = encodeAbiParameters(
+    [
+      { name: "chainId", type: "uint256" },
+      { name: "escrow", type: "address" },
+      { name: "paymentInfoHash", type: "bytes32" }
+    ],
+    [BigInt(chainId), escrowAddress, paymentInfoHash]
+  );
+  return keccak2562(outerEncoded);
+}
+function computePayerAgnosticPaymentInfoHash(chainId, paymentInfo, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  return hashPaymentInfo(chainId, paymentInfo, zeroAddress, escrowAddress);
+}
+function computePaymentInfoHash(chainId, paymentInfo, escrowAddress = AUTH_CAPTURE_ESCROW_ADDRESS) {
+  return hashPaymentInfo(chainId, paymentInfo, paymentInfo.payer, escrowAddress);
+}
+async function signERC3009(signer, authorization, extra, tokenAddress, chainId) {
+  const domain = {
+    name: extra.name,
+    version: extra.version,
+    chainId,
+    verifyingContract: getAddress2(tokenAddress)
+  };
+  const message = {
+    from: getAddress2(authorization.from),
+    to: getAddress2(authorization.to),
+    value: BigInt(authorization.value),
+    validAfter: BigInt(authorization.validAfter),
+    validBefore: BigInt(authorization.validBefore),
+    nonce: authorization.nonce
+  };
+  return signer.signTypedData({
+    domain,
+    types: RECEIVE_AUTHORIZATION_TYPES,
+    primaryType: "ReceiveWithAuthorization",
+    message
+  });
+}
+async function verifyERC3009Signature(signer, authorization, signature, extra, tokenAddress) {
+  return verifyTypedDataSignature(signer, {
+    address: getAddress2(authorization.from),
+    domain: {
+      name: extra.name,
+      version: extra.version,
+      chainId: extra.chainId,
+      verifyingContract: getAddress2(tokenAddress)
+    },
+    types: RECEIVE_AUTHORIZATION_TYPES,
+    primaryType: "ReceiveWithAuthorization",
+    message: {
+      from: getAddress2(authorization.from),
+      to: getAddress2(authorization.to),
+      value: BigInt(authorization.value),
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      nonce: authorization.nonce
+    },
+    signature
+  });
+}
+async function signPermit2(signer, permit, chainId) {
+  const domain = {
+    name: "Permit2",
+    chainId,
+    verifyingContract: PERMIT2_ADDRESS
+  };
+  const message = {
+    permitted: {
+      token: getAddress2(permit.permitted.token),
+      amount: BigInt(permit.permitted.amount)
+    },
+    spender: getAddress2(permit.spender),
+    nonce: BigInt(permit.nonce),
+    deadline: BigInt(permit.deadline)
+  };
+  return signer.signTypedData({
+    domain,
+    types: PERMIT2_TRANSFER_FROM_TYPES,
+    primaryType: "PermitTransferFrom",
+    message
+  });
+}
+async function verifyPermit2Signature(signer, permit, signature, chainId) {
+  return verifyTypedDataSignature(signer, {
+    address: getAddress2(permit.from),
+    domain: {
+      name: "Permit2",
+      chainId,
+      verifyingContract: PERMIT2_ADDRESS
+    },
+    types: PERMIT2_TRANSFER_FROM_TYPES,
+    primaryType: "PermitTransferFrom",
+    message: {
+      permitted: {
+        token: getAddress2(permit.permitted.token),
+        amount: BigInt(permit.permitted.amount)
+      },
+      spender: getAddress2(permit.spender),
+      nonce: BigInt(permit.nonce),
+      deadline: BigInt(permit.deadline)
+    },
+    signature
+  });
+}
+function generateSalt() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return toHex(bytes);
+}
+function extraAddress(value) {
+  if (!value || !isAddress2(value)) return zeroAddress;
+  return getAddress2(value);
+}
+function isNonZeroAddress(value) {
+  if (!value || !isAddress2(value)) return false;
+  return !isAddressEqual2(getAddress2(value), zeroAddress);
+}
+function isSaltBindingOn(extra) {
+  return isNonZeroAddress(extra.receiverAuthorizer) || isNonZeroAddress(extra.policy);
+}
+function deriveBoundSalt(receiverAuthorizer, policy, saltNonce) {
+  const encoded = encodeAbiParameters(
+    [
+      { name: "typehash", type: "bytes32" },
+      { name: "receiverAuthorizer", type: "address" },
+      { name: "policy", type: "address" },
+      { name: "saltNonce", type: "uint256" }
+    ],
+    [SALT_BINDING_TYPEHASH, receiverAuthorizer, policy, BigInt(saltNonce)]
+  );
+  return keccak2562(encoded);
+}
+
+export {
+  AUTH_CAPTURE_SCHEME,
+  AUTH_CAPTURE_ESCROW_V1_0_ADDRESS,
+  EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  AUTH_CAPTURE_ESCROW_V1_1_ADDRESS,
+  AUTH_CAPTURE_ESCROW_ADDRESS,
+  EIP3009_TOKEN_COLLECTOR_ADDRESS,
+  PERMIT2_TOKEN_COLLECTOR_ADDRESS,
+  OPERATOR_REFUND_COLLECTOR_ADDRESS,
+  AUTH_CAPTURE_DEPLOYMENT_V1_1,
+  resolveAuthCaptureDeployment,
+  DEFAULT_CUSTOM_OPERATOR_AUTHORIZE_GAS_LIMIT,
+  OPERATOR_EIP712_DOMAIN,
+  VOID_TYPES,
+  REFUND_TYPES,
+  chargeTypesForDeployment,
+  captureTypesForDeployment,
+  feeAmountFromBps,
+  computePayerAgnosticPaymentInfoHash,
+  computePaymentInfoHash,
+  signERC3009,
+  verifyERC3009Signature,
+  signPermit2,
+  verifyPermit2Signature,
+  generateSalt,
+  extraAddress,
+  isNonZeroAddress,
+  isSaltBindingOn,
+  deriveBoundSalt
+};
+//# sourceMappingURL=chunk-F43KMW3I.mjs.map

@@ -1,0 +1,9 @@
+import * as Store from '../../../Store.js';
+/**
+ * Creates the in-memory store used when a Tempo server method is configured without `store`.
+ *
+ * Replay protection backed by this store only covers the current instance, so this warns once
+ * per `method` per process.
+ */
+export declare function fallbackStore(method: string): Store.AtomicStore;
+//# sourceMappingURL=fallback-store.d.ts.map

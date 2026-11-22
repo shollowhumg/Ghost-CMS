@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`e55b46ea-e207-47d4-a0bb-309291632609`,e._sentryDebugIdIdentifier=`sentry-dbid-e55b46ea-e207-47d4-a0bb-309291632609`)}catch{}})();import{s as e,t}from"./react-DFHZ-wBR.js";var n=e(t(),1),r=(0,n.createContext)(void 0),i=()=>(0,n.useContext)(r);export{i as n,r as t};
+//# debugId=e55b46ea-e207-47d4-a0bb-309291632609

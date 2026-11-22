@@ -1,0 +1,13 @@
+/**
+ * A hostname without its trailing dots, which the URL parser keeps, every one of them:
+ * `localhost..` is `localhost`. A loop rather than a regular expression, which would take
+ * time quadratic in the number of dots on a hostname with many dots before its end.
+ */
+export declare function withoutTrailingDots(hostname: string): string;
+/**
+ * Whether a host is the machine itself: `localhost`, or a loopback or unspecified address.
+ * Pass `URL.hostname`, so the host is already normalised. Trailing dots are dropped, as
+ * `isGhostHost` drops them.
+ */
+export declare function isLocalhost(hostname: string): boolean;
+//# sourceMappingURL=localhost.d.ts.map

@@ -1,0 +1,313 @@
+import { type Address, type Client as viem_Client } from 'viem';
+import * as Method from '../../Method.js';
+import * as Account from '../../viem/Account.js';
+import * as Client from '../../viem/Client.js';
+import * as z from '../../zod.js';
+import * as AutoSwap from '../internal/auto-swap.js';
+import * as Methods from '../Methods.js';
+import type * as AccountResolution from './ResolveAccount.js';
+/**
+ * Seconds from now the client sets as the expiring-nonce `validBefore`,
+ * capped at the challenge expiry.
+ *
+ * Fee payers require at least `defaults.minRemainingValiditySeconds` (15s) of
+ * remaining validity when they co-sign, so a 25s window leaves about 10s for
+ * clock skew between client and server, signing and round trips. It stays inside
+ * the server's default 30s confirmation timeout and within sponsor policies whose
+ * `maxValidityWindowSeconds` is 25 or more.
+ */
+export declare const validityWindowSeconds = 25;
+/** Runtime context accepted by the Tempo charge client method. */
+export type ChargeContext = {
+    account?: Account.getResolver.Parameters['account'] | undefined;
+    autoSwap?: AutoSwap.resolve.Value | undefined;
+    feeToken?: Address | undefined;
+    mode?: Methods.ChargeMode | undefined;
+};
+/**
+ * Creates a Tempo charge method intent for usage on the client.
+ *
+ * @example
+ * ```ts
+ * import { tempo } from 'mppx/client'
+ * import { privateKeyToAccount } from 'viem/accounts'
+ *
+ * const charge = tempo.charge({
+ *   account: privateKeyToAccount('0x...'),
+ * })
+ * ```
+ */
+export declare function charge(parameters?: charge.Parameters): {
+    readonly canHandleChallenge?: Method.CanHandleChallengeFn | undefined;
+    readonly context?: z.ZodMiniObject<{
+        account: z.ZodMiniOptional<z.ZodMiniCustom<`0x${string}` | Account.Account | undefined, `0x${string}` | Account.Account | undefined>>;
+        autoSwap: z.ZodMiniOptional<z.ZodMiniCustom<AutoSwap.resolve.Value | undefined, AutoSwap.resolve.Value | undefined>>;
+        feeToken: z.ZodMiniOptional<z.ZodMiniCustom<`0x${string}` | undefined, `0x${string}` | undefined>>;
+        mode: z.ZodMiniOptional<z.ZodMiniEnum<{
+            pull: "pull";
+            push: "push";
+        }>>;
+    }, z.core.$strip> | undefined;
+    readonly name: "tempo";
+    readonly intent: "charge";
+    readonly schema: {
+        credential: {
+            payload: z.ZodMiniDiscriminatedUnion<[z.ZodMiniObject<{
+                hash: z.ZodMiniString<string>;
+                type: z.ZodMiniLiteral<"hash">;
+            }, z.core.$strip>, z.ZodMiniObject<{
+                signature: z.ZodMiniString<string>;
+                type: z.ZodMiniLiteral<"transaction">;
+            }, z.core.$strip>, z.ZodMiniObject<{
+                signature: z.ZodMiniString<string>;
+                type: z.ZodMiniLiteral<"proof">;
+            }, z.core.$strip>, z.ZodMiniObject<{
+                hash: z.ZodMiniString<string>;
+                senderTag: z.ZodMiniString<string>;
+                type: z.ZodMiniLiteral<"zone">;
+                zoneId: z.ZodMiniNumber<number>;
+            }, z.core.$strip>], "type">;
+        };
+        request: z.ZodMiniPipe<z.ZodMiniObject<{
+            machineTokenEnabled: z.ZodMiniOptional<z.ZodMiniBoolean<boolean>>;
+            amount: z.ZodMiniString<string>;
+            chainId: z.ZodMiniOptional<z.ZodMiniNumber<number>>;
+            currency: z.ZodMiniString<string>;
+            decimals: z.ZodMiniNumber<number>;
+            description: z.ZodMiniOptional<z.ZodMiniString<string>>;
+            externalId: z.ZodMiniOptional<z.ZodMiniString<string>>;
+            feePayer: z.ZodMiniOptional<z.ZodMiniPipe<z.ZodMiniUnion<readonly [z.ZodMiniBoolean<boolean>, z.ZodMiniCustom<import("viem").Account, import("viem").Account>]>, z.ZodMiniTransform<boolean, boolean | import("viem").Account>>>;
+            memo: z.ZodMiniOptional<z.ZodMiniNever>;
+            recipient: z.ZodMiniOptional<z.ZodMiniString<string>>;
+            splits: z.ZodMiniOptional<z.ZodMiniArray<z.ZodMiniObject<{
+                amount: z.ZodMiniString<string>;
+                memo: z.ZodMiniOptional<z.ZodMiniString<string>>;
+                recipient: z.ZodMiniPipe<z.ZodMiniString<string>, z.ZodMiniTransform<`0x${string}`, string>>;
+            }, z.core.$strip>>>;
+            supportedModes: z.ZodMiniOptional<z.ZodMiniArray<z.ZodMiniEnum<{
+                pull: "pull";
+                push: "push";
+            }>>>;
+            zones: z.ZodMiniOptional<z.ZodMiniUnion<readonly [z.ZodMiniLiteral<true>, z.ZodMiniArray<z.ZodMiniNumber<number>>]>>;
+        }, z.core.$strip>, z.ZodMiniTransform<{
+            currency: string;
+            description?: string | undefined;
+            externalId?: string | undefined;
+            recipient?: string | undefined;
+            amount: string;
+            methodDetails?: {
+                machineTokenEnabled?: boolean | undefined;
+                chainId?: number | undefined;
+                feePayer?: boolean | undefined;
+                splits?: {
+                    memo?: string | undefined;
+                    recipient: `0x${string}`;
+                    amount: string;
+                }[] | undefined;
+                supportedModes?: ("pull" | "push")[] | undefined;
+                zones?: true | number[] | undefined;
+            } | undefined;
+        }, {
+            machineTokenEnabled?: boolean | undefined;
+            amount: string;
+            chainId?: number | undefined;
+            currency: string;
+            decimals: number;
+            description?: string | undefined;
+            externalId?: string | undefined;
+            feePayer?: boolean | undefined;
+            memo?: undefined;
+            recipient?: string | undefined;
+            splits?: {
+                amount: string;
+                memo?: string | undefined;
+                recipient: `0x${string}`;
+            }[] | undefined;
+            supportedModes?: ("pull" | "push")[] | undefined;
+            zones?: true | number[] | undefined;
+        }>>;
+    };
+    readonly createCredential: Method.CreateCredentialFn<{
+        readonly name: "tempo";
+        readonly intent: "charge";
+        readonly schema: {
+            credential: {
+                payload: z.ZodMiniDiscriminatedUnion<[z.ZodMiniObject<{
+                    hash: z.ZodMiniString<string>;
+                    type: z.ZodMiniLiteral<"hash">;
+                }, z.core.$strip>, z.ZodMiniObject<{
+                    signature: z.ZodMiniString<string>;
+                    type: z.ZodMiniLiteral<"transaction">;
+                }, z.core.$strip>, z.ZodMiniObject<{
+                    signature: z.ZodMiniString<string>;
+                    type: z.ZodMiniLiteral<"proof">;
+                }, z.core.$strip>, z.ZodMiniObject<{
+                    hash: z.ZodMiniString<string>;
+                    senderTag: z.ZodMiniString<string>;
+                    type: z.ZodMiniLiteral<"zone">;
+                    zoneId: z.ZodMiniNumber<number>;
+                }, z.core.$strip>], "type">;
+            };
+            request: z.ZodMiniPipe<z.ZodMiniObject<{
+                machineTokenEnabled: z.ZodMiniOptional<z.ZodMiniBoolean<boolean>>;
+                amount: z.ZodMiniString<string>;
+                chainId: z.ZodMiniOptional<z.ZodMiniNumber<number>>;
+                currency: z.ZodMiniString<string>;
+                decimals: z.ZodMiniNumber<number>;
+                description: z.ZodMiniOptional<z.ZodMiniString<string>>;
+                externalId: z.ZodMiniOptional<z.ZodMiniString<string>>;
+                feePayer: z.ZodMiniOptional<z.ZodMiniPipe<z.ZodMiniUnion<readonly [z.ZodMiniBoolean<boolean>, z.ZodMiniCustom<import("viem").Account, import("viem").Account>]>, z.ZodMiniTransform<boolean, boolean | import("viem").Account>>>;
+                memo: z.ZodMiniOptional<z.ZodMiniNever>;
+                recipient: z.ZodMiniOptional<z.ZodMiniString<string>>;
+                splits: z.ZodMiniOptional<z.ZodMiniArray<z.ZodMiniObject<{
+                    amount: z.ZodMiniString<string>;
+                    memo: z.ZodMiniOptional<z.ZodMiniString<string>>;
+                    recipient: z.ZodMiniPipe<z.ZodMiniString<string>, z.ZodMiniTransform<`0x${string}`, string>>;
+                }, z.core.$strip>>>;
+                supportedModes: z.ZodMiniOptional<z.ZodMiniArray<z.ZodMiniEnum<{
+                    pull: "pull";
+                    push: "push";
+                }>>>;
+                zones: z.ZodMiniOptional<z.ZodMiniUnion<readonly [z.ZodMiniLiteral<true>, z.ZodMiniArray<z.ZodMiniNumber<number>>]>>;
+            }, z.core.$strip>, z.ZodMiniTransform<{
+                currency: string;
+                description?: string | undefined;
+                externalId?: string | undefined;
+                recipient?: string | undefined;
+                amount: string;
+                methodDetails?: {
+                    machineTokenEnabled?: boolean | undefined;
+                    chainId?: number | undefined;
+                    feePayer?: boolean | undefined;
+                    splits?: {
+                        memo?: string | undefined;
+                        recipient: `0x${string}`;
+                        amount: string;
+                    }[] | undefined;
+                    supportedModes?: ("pull" | "push")[] | undefined;
+                    zones?: true | number[] | undefined;
+                } | undefined;
+            }, {
+                machineTokenEnabled?: boolean | undefined;
+                amount: string;
+                chainId?: number | undefined;
+                currency: string;
+                decimals: number;
+                description?: string | undefined;
+                externalId?: string | undefined;
+                feePayer?: boolean | undefined;
+                memo?: undefined;
+                recipient?: string | undefined;
+                splits?: {
+                    amount: string;
+                    memo?: string | undefined;
+                    recipient: `0x${string}`;
+                }[] | undefined;
+                supportedModes?: ("pull" | "push")[] | undefined;
+                zones?: true | number[] | undefined;
+            }>>;
+        };
+    }, {
+        account?: `0x${string}` | Account.Account | undefined;
+        autoSwap?: AutoSwap.resolve.Value | undefined;
+        feeToken?: `0x${string}` | undefined;
+        mode?: "pull" | "push" | undefined;
+    }>;
+};
+export declare namespace charge {
+    type AutoSwap = AutoSwap.resolve.Value;
+    type Context = ChargeContext;
+    type ResolveAccount = AccountResolution.ResolveAccount;
+    type ResolveAccountInfo = AccountResolution.ResolveAccountInfo;
+    /** Pays from a Zone balance when a challenge accepts that Zone. */
+    type Zone = {
+        /** Client for the Zone chain, with the paying account and Zone RPC authorization. */
+        client: viem_Client;
+        /** Zone ID. Derived from `client.chain.id` when omitted. */
+        zoneId?: number | undefined;
+        /** Milliseconds to wait for the withdrawal to settle on Tempo. @default 60_000 */
+        settlementTimeoutMs?: number | undefined;
+    };
+    type Parameters = {
+        /**
+         * Automatically swap from a fallback currency (pathUsd, USDC.e) via the
+         * Tempo DEX when the user lacks sufficient balance of the target currency.
+         *
+         * @default false
+         */
+        autoSwap?: AutoSwap | undefined;
+        /** Client identifier used to derive the client fingerprint in attribution memos. */
+        clientId?: string | undefined;
+        /**
+         * Token the payer pays its transaction fee in, when the challenge is not fee-sponsored.
+         * Set it for an access key whose spending limits do not cover the default fee token,
+         * such as a key limited to OUSD paying a USDC.e charge.
+         */
+        feeToken?: Address | undefined;
+        /**
+         * Chain ID this client is willing to pay on. When set, the client rejects
+         * any challenge whose `methodDetails.chainId` differs, and signs on this
+         * chain when the challenge omits a chain ID.
+         */
+        expectedChainId?: number | undefined;
+        /**
+         * Chains permitted for payment credentials. Omitted allows any chain; empty rejects all.
+         * A single entry supplies an omitted challenge chain unless `expectedChainId` is set.
+         * When both policies are set, the selected chain must satisfy both.
+         */
+        allowedChainIds?: readonly number[] | undefined;
+        /**
+         * Allowlist of payment recipient addresses. When set, both the primary
+         * recipient and every split recipient must be included in this list.
+         */
+        expectedRecipients?: readonly Address[] | undefined;
+        /**
+         * Allowlist of TIP-20 currency addresses this client will pay in, compared
+         * case-insensitively. Offers in other currencies are skipped during selection
+         * and rejected before signing; an empty list rejects all. Required with
+         * `maxAmount` or `maxAtomicAmount`, which are denominated in the challenge currency.
+         */
+        currencies?: readonly Address[] | undefined;
+        /**
+         * Decimals of the `currencies`, used to parse `maxAmount`. Required with
+         * `maxAmount` because challenges do not carry currency decimals.
+         */
+        decimals?: number | undefined;
+        /**
+         * Maximum display-unit amount (e.g. `'1.5'`) the client is willing to pay per
+         * charge, parsed with `decimals`. Values with more fractional digits than
+         * `decimals` are rejected rather than rounded. Compared against the challenge
+         * amount, which includes splits; larger offers are skipped during selection and
+         * rejected before signing. Applies per credential, not cumulatively across
+         * payment retries. Requires `currencies`.
+         */
+        maxAmount?: string | undefined;
+        /**
+         * Maximum amount the client is willing to pay per charge, in raw base units of
+         * the challenge currency (compared directly with the challenge `amount`).
+         * Checked like `maxAmount`. Requires `currencies`.
+         */
+        maxAtomicAmount?: string | undefined;
+        /**
+         * Controls how the charge transaction is submitted.
+         *
+         * - `'push'`: Client broadcasts the transaction and sends the tx hash to the server.
+         * - `'pull'`: Client signs the transaction and sends the serialized tx to the server for broadcast.
+         *
+         * If the server advertises `supportedModes`, this setting must be one of
+         * the supported values for the challenge.
+         *
+         * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
+         */
+        mode?: Methods.ChargeMode | undefined;
+        /** Selects the account that signs this charge after the challenge and chain are known. */
+        resolveAccount?: ResolveAccount | undefined;
+        /**
+         * Pays from a Zone balance instead of the account's Tempo balance when the
+         * challenge accepts this Zone (`methodDetails.zones`). Other challenges,
+         * and split payments, are paid on Tempo as usual.
+         */
+        zone?: Zone | undefined;
+    } & Account.getResolver.Parameters & Client.getResolver.Parameters;
+}
+//# sourceMappingURL=Charge.d.ts.map

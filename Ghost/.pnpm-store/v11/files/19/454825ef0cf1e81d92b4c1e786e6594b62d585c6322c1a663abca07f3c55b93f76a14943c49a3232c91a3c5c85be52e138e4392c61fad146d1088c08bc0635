@@ -1,0 +1,11 @@
+import type { UpgradeDiagnostic, UpgradeErrorCode } from './schemas.ts';
+/** Expected adapter rejection. The code and diagnostics are the only public data. */
+export declare class UpgradeAdapterError extends Error {
+    readonly code: UpgradeErrorCode;
+    readonly diagnostics?: UpgradeDiagnostic[];
+    constructor({ code, diagnostics, }: {
+        code: UpgradeErrorCode;
+        diagnostics?: UpgradeDiagnostic[];
+    });
+}
+//# sourceMappingURL=errors.d.ts.map

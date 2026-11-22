@@ -1,0 +1,8 @@
+/**
+ * Escape HTML special characters
+ *
+ * Entities are decoded first, so text stored with them isn't escaped twice. Only entities that
+ * end in a semicolon: legacy ones without one would turn a URL's `&region=` into `®ion=`.
+ */
+export declare function escapeHtml(unsafe: string | null | undefined): string;
+//# sourceMappingURL=escape-html.d.ts.map

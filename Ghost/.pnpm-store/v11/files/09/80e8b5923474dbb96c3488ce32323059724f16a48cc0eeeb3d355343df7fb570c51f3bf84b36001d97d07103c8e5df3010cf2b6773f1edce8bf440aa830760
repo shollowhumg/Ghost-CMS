@@ -1,0 +1,97 @@
+import type { Hex } from 'viem';
+import * as Store from '../Store.js';
+import { type State } from '../tempo/session/server/ChannelStore.js';
+/**
+ * Durable Object class that stores Tempo session channels, as {@link Store.durableObject}
+ * does, and settles them on-chain without a request in flight.
+ *
+ * Every channel lives in its own object. After each write of a channel state, the object
+ * checks how much a settlement could capture ({@link unsettledAmount}): from
+ * `max(10% of deposit, minUnsettledAmount)` it sends `{ channelId }` to the settlement
+ * queue at once; below that it sets an alarm that sends it once the channel has had no
+ * write for `staleAfterMs`. The Worker's `queue()` handler settles it with
+ * {@link settle}. After each send, a watchdog alarm sends it again while the channel
+ * stays unsettled (a dropped, dead-lettered or failed job), waiting twice as long each
+ * time, up to `maxAttempts` sends; settling more on-chain restarts the count. A close request,
+ * or a threshold's worth of new vouchers since the last send, sends it again at once and
+ * restarts the count, so a failed job never leaves them waiting on a long watchdog.
+ *
+ * Export a subclass from your Worker, bind it with a `new_sqlite_classes` migration and
+ * bind the queue as `MPPX_SETTLEMENT_QUEUE`, or override
+ * {@link ChannelStore.settlement} to change the queue or thresholds.
+ *
+ * @example
+ * ```ts
+ * import { DurableObject } from 'cloudflare:workers'
+ * import { ChannelStore } from 'mppx/cloudflare'
+ *
+ * export class MppxChannels extends ChannelStore.rpc(DurableObject) {}
+ * ```
+ */
+export declare class ChannelStore extends Store.DurableObjectStore {
+    /**
+     * The settlement queue and thresholds. Reads the `MPPX_SETTLEMENT_QUEUE` binding by
+     * default; a subclass overrides it to use another binding or other thresholds.
+     */
+    protected settlement(): ChannelStore.Settlement;
+    /** Schedules settlement of a written channel state, and drops it for a closed or deleted one. */
+    protected onWrite(key: string, _previous: unknown, next: unknown, transaction?: Store.DurableObjectStore.Storage | undefined): Promise<void>;
+    /** Sends a channel over the threshold or gone stale to the queue, or sends it again from the watchdog while unsettled. */
+    alarm(): Promise<void>;
+    /**
+     * Sends the channel to the settlement queue and sets the watchdog alarm, or gives up after
+     * `maxAttempts` sends. A send that fails leaves the count alone and tries again from an
+     * alarm, since the write that scheduled it has already committed.
+     */
+    private send;
+}
+export declare namespace ChannelStore {
+    /** The settlement queue and when to settle. */
+    type Settlement = {
+        /** Queue the object sends `{ channelId }` to; the Worker's `queue()` handler settles it. */
+        queue: Queue | undefined;
+        /** Raw amount a settlement must capture before it is sent at once, if 10% of the deposit is less. @default 100_000n */
+        minUnsettledAmount?: bigint | undefined;
+        /** Sends a channel below the threshold once it has had no write for this long. @default 300_000 */
+        staleAfterMs?: number | undefined;
+        /**
+         * Sends a channel again this long after a send while it stays unsettled, doubling each time.
+         * Keep the first resend well inside the escrow's close grace period (15 minutes), after which
+         * a payer who requested a close can withdraw what is unsettled; a closing channel is sent
+         * again after at most 2 minutes. @default 300_000
+         */
+        watchdogMs?: number | undefined;
+        /** Sends a channel at most this many times without on-chain progress. @default 6 */
+        maxAttempts?: number | undefined;
+        /** Tries a send that failed again this much later. @default 60_000 */
+        retryMs?: number | undefined;
+    };
+    /** The subset of a Cloudflare `Queue` binding the object uses. */
+    type Queue = {
+        send: (body: Message) => Promise<unknown>;
+    };
+    /** The settlement job the object sends. */
+    type Message = {
+        channelId: Hex;
+    };
+}
+/** Whether a stored value is a precompile-backed session channel state. */
+export declare function isChannelState(value: unknown): value is State;
+/**
+ * The raw amount a settlement of the channel would capture now: the largest accepted voucher
+ * within `spent` (as mppx's `settle` picks it) above `settledOnChain`.
+ */
+export declare function unsettledAmount(state: State): bigint;
+/**
+ * Whether the server's own cooperative close may still land: its marker stands in
+ * `closeRequestedAt` and its transaction has not expired. That close captures every voucher a
+ * settlement could, so settling meanwhile only spends gas.
+ */
+export declare function pendingClose(state: State, now?: number): boolean;
+/**
+ * When the channel needs settling: `threshold` (now) once the unsettled amount reaches
+ * `max(10% of deposit, minUnsettledAmount)`, `stale` (once idle) below it, or
+ * `undefined` when it is finalized or has nothing to settle.
+ */
+export declare function settlementDue(state: State, settlement?: Pick<ChannelStore.Settlement, 'minUnsettledAmount'>): 'stale' | 'threshold' | undefined;
+//# sourceMappingURL=ChannelStore.d.ts.map

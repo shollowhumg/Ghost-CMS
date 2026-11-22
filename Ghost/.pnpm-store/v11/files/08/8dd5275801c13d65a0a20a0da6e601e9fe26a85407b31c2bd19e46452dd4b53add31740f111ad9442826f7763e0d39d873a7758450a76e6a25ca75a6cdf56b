@@ -1,0 +1,87 @@
+# @tryghost/kg-default-nodes
+
+## 2.3.1
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+- Fixed links whose query strings look like HTML entities without a semicolon, such as `&region=` or `&para=`, being corrupted in rendered cards.
+
+- Updated TryGhost SDK dependencies
+
+## 2.3.0
+
+### Minor Changes
+
+- Added alt text support for the product card image: a productImageAlt property on the product node, rendered as the image's alt attribute on web and email, parsed from HTML on import, and editable from an Alt toggle on the card in the editor
+
+### Patch Changes
+
+- Updated dependencies
+
+- Fixed call-to-action cards with a brand colour button losing that colour when parsed from HTML, which stored an invalid button colour instead.
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 2.2.6
+
+### Patch Changes
+
+- Fixed only the first Transistor card loading when a post contains several Transistor cards
+
+- Fixed the Transistor card sending a random background colour to the embed in browsers that randomise canvas readback, such as Firefox with `resistFingerprinting` enabled
+
+## 2.2.5
+
+### Patch Changes
+
+- Stopped publishing the TypeScript incremental build cache (build/tsconfig.tsbuildinfo) in the npm package
+
+- Bumped TryGhost SDK dependencies to their latest versions
+
+## 2.2.4
+
+### Patch Changes
+
+- Updated dependencies
+
+- Stopped installing jsdom with the package; only its tests use it
+
+- Fixed bookmark card descriptions in emails losing their last character on desktop when the description is exactly at the truncation limit.
+
+- Updated dependencies
+
+## 2.2.3
+
+### Patch Changes
+
+- Added URL transforms for embed card thumbnails so self-hosted thumbnails are stored with the site URL placeholder
+
+## 2.2.2
+
+### Patch Changes
+
+- Removed html-minifier from runtime dependencies; it is only used by the package's tests
+
+## 2.2.1
+
+### Patch Changes
+
+- Updated Ghost docs links to new URLs
+
+## 2.2.0
+
+### Minor Changes
+
+- Update jsdom to 30 & node engines to match jsdom's
+
+### Patch Changes
+
+- Removed the unused emailCustomization and emailCustomizationAlpha feature options.
+
+- Documented the package API and corrected the development instructions in the README

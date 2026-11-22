@@ -1,0 +1,1228 @@
+import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope';
+import { decodeFunctionData, formatUnits, keccak256, parseEventLogs, WaitForTransactionReceiptTimeoutError, } from 'viem';
+import { getTransaction, getTransactionReceipt, sendRawTransaction, sendRawTransactionSync, signTransaction, verifyTypedData, waitForTransactionReceipt, call as viem_call, } from 'viem/actions';
+import { Abis, Actions, Transaction } from 'viem/tempo';
+import { tempo as tempo_chain } from 'viem/tempo/chains';
+import { BroadcastOutcomeUnknownError, CredentialReplayedError, PaymentError, VerificationFailedError, } from '../../Errors.js';
+import * as Expires from '../../Expires.js';
+import * as Method from '../../Method.js';
+import * as Store from '../../Store.js';
+import * as Client from '../../viem/Client.js';
+import * as Attribution from '../Attribution.js';
+import * as Account from '../internal/account.js';
+import * as TempoAddress from '../internal/address.js';
+import * as Charge_internal from '../internal/charge.js';
+import * as defaults from '../internal/defaults.js';
+import * as FeePayer from '../internal/fee-payer.js';
+import { resolveFeeToken } from '../internal/fee-token.js';
+import * as MachineTokenCharge from '../internal/machine-token-charge.js';
+import * as Proof from '../internal/proof.js';
+import * as Selectors from '../internal/selectors.js';
+import * as Zone from '../internal/zone.js';
+import * as Methods from '../Methods.js';
+import { fallbackStore } from './internal/fallback-store.js';
+import * as Relay from './Relay.js';
+import * as SponsorBudget from './SponsorBudget.js';
+/**
+ * Creates a Tempo charge method intent for usage on the server.
+ *
+ * @example
+ * ```ts
+ * import { tempo } from 'mppx/server'
+ *
+ * const charge = tempo.charge()
+ * ```
+ */
+export function charge(parameters = {}) {
+    const { machineTokenEnabled, allowedFeeTokens: configuredAllowedFeeTokens, amount, confirmationTimeoutMs = 30_000, currency = defaults.resolveCurrency(parameters), decimals = defaults.decimals, description, externalId, feeToken: configuredFeeToken, feePayerPolicy, html, relay, sponsorBudget, splits, supportedModes, validateSender, waitForConfirmation = true, zones, } = parameters;
+    if (configuredAllowedFeeTokens?.length === 0)
+        throw new Error('`allowedFeeTokens` must contain at least one token.');
+    const storeKeyPrefix = parameters.storeKeyPrefix ?? '';
+    const rawStore = (parameters.store ??
+        fallbackStore('tempo.charge'));
+    const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix });
+    const { maxInFlightReservations: legacyMaxInFlightReservations, maxInFlightTotalFee: legacyMaxInFlightTotalFee, ...transactionFeePayerPolicy } = feePayerPolicy ?? {};
+    const sponsorBudgetConfig = sponsorBudget === false ? undefined : (sponsorBudget ?? {});
+    const maxInFlightReservations = sponsorBudgetConfig?.maxInFlightReservations ?? legacyMaxInFlightReservations ?? 100;
+    const maxInFlightTotalFee = sponsorBudgetConfig?.maxInFlightTotalFee ??
+        legacyMaxInFlightTotalFee ??
+        (feePayerPolicy?.maxTotalFee ?? 50000000000000000n) * 10n;
+    if (sponsorBudgetConfig) {
+        if (!Number.isSafeInteger(maxInFlightReservations) || maxInFlightReservations <= 0)
+            throw new Error('`sponsorBudget.maxInFlightReservations` must be a positive safe integer.');
+        if (maxInFlightTotalFee <= 0n)
+            throw new Error('`sponsorBudget.maxInFlightTotalFee` must be greater than zero.');
+    }
+    // Aggregate exposure belongs to the actual sponsor, not a caller-specific replay namespace.
+    // Keep it unprefixed and shared across every tenant/process using the sponsor.
+    const sponsorBudgetStore = sponsorBudgetConfig
+        ? Store.from(sponsorBudgetConfig.store ?? rawStore)
+        : undefined;
+    const proofStore = parameters.store
+        ? Store.from(parameters.store, {
+            keyPrefix: storeKeyPrefix,
+        })
+        : undefined;
+    const { recipient, feePayer, remoteFeePayer } = Account.resolve(parameters);
+    if (configuredFeeToken && remoteFeePayer)
+        throw new Error('`feeToken` can only be configured for a local fee payer.');
+    const getClient = Client.getResolver({
+        chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
+        remoteFeePayer,
+        getClient: parameters.getClient,
+        rpcUrl: defaults.rpcUrl,
+    });
+    function resolveRequest(request) {
+        const parsed = Methods.charge.schema.request.safeParse(request);
+        if (parsed.success)
+            return parsed.data;
+        // Credential handlers receive the HMAC-bound request in canonical output
+        // form, so it must not be transformed a second time.
+        return request;
+    }
+    async function resolveCredentialContext({ credential, request, }) {
+        const { challenge, payload } = credential;
+        const resolvedRequest = resolveRequest(request);
+        const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId;
+        const { amount, methodDetails } = resolvedRequest;
+        const supportedModes = methodDetails?.supportedModes;
+        const currency = resolvedRequest.currency;
+        const recipient = resolvedRequest.recipient;
+        const machineTokenEnabled = methodDetails?.machineTokenEnabled === true;
+        const settlementSender = machineTokenEnabled
+            ? MachineTokenCharge.getSettlementSender(chainId)
+            : undefined;
+        const isZeroAmount = BigInt(amount) === 0n;
+        Expires.assert(challenge.expires, challenge.id);
+        if (isZeroAmount && payload.type !== 'proof')
+            throw new MismatchError('Zero-amount challenges require a proof credential.', {});
+        // Request-level local sponsorship takes precedence over the hosted provider.
+        const localFeePayer = Account.is(request.feePayer) ? request.feePayer : feePayer;
+        const allowedFeeTokens = configuredAllowedFeeTokens ??
+            (localFeePayer || !remoteFeePayer ? FeePayer.defaultAllowedFeeTokens(chainId) : undefined);
+        return {
+            allowedFeeTokens,
+            amount,
+            machineTokenEnabled,
+            chainId,
+            challenge,
+            client: await getClient({ chainId }),
+            currency,
+            isZeroAmount,
+            methodDetails,
+            payload,
+            recipient,
+            requestAllowsFeePayer: request.feePayer !== false,
+            resolvedRequest,
+            settlementSenders: settlementSender ? [settlementSender] : [],
+            supportedModes,
+        };
+    }
+    /** Validates a recognized payment route and retains its funding metadata. */
+    function validatePaymentRoute(calls, context, transfers, isFeePayerTx = false) {
+        const { amount, currency, machineTokenEnabled, recipient } = context;
+        const machineRoute = machineTokenEnabled
+            ? MachineTokenCharge.matchRoute({
+                calls,
+                chainId: context.chainId ?? context.client.chain?.id,
+                currency,
+                transfers,
+            })
+            : undefined;
+        const matchedCalls = machineRoute?.transfers ??
+            assertTransferCalls(calls, {
+                currency,
+                exactCount: isFeePayerTx,
+                transfers,
+            });
+        assertChallengeBoundCallMemo(matchedCalls, {
+            challengeId: context.challenge.id,
+            realm: context.challenge.realm,
+        });
+        if (machineRoute)
+            return {
+                settlementSenders: [machineRoute.settlementSender],
+                fundingCurrency: machineRoute.calls[0].to,
+            };
+        try {
+            const fundingCurrency = FeePayer.validateCalls(calls, { amount, currency, recipient }, { currency, expectedTransfers: transfers });
+            return { settlementSenders: [], fundingCurrency };
+        }
+        catch (error) {
+            if (isFeePayerTx)
+                throw error;
+            // Unrecognized routes remain valid for unsponsored payments, without funding metadata.
+            return { settlementSenders: [], fundingCurrency: undefined };
+        }
+    }
+    async function validateHashCredential(credential, payload, context) {
+        const { amount, chainId, challenge, client, currency, methodDetails, recipient, settlementSenders, supportedModes, } = context;
+        if (supportedModes && !supportedModes.includes('push'))
+            throw new MismatchError('Hash credentials are not supported for this challenge.', {});
+        const source = parseHashCredentialSource({
+            chainId: chainId ?? client.chain?.id,
+            source: credential.source,
+        });
+        const transfers = getExpectedTransfers({ amount, methodDetails, recipient });
+        const receipt = await getTransactionReceipt(client, {
+            hash: payload.hash,
+        });
+        const sender = source?.address ?? receipt.from;
+        const matchedLogs = await assertTransferLogs(receipt, {
+            currency,
+            sender,
+            settlementSenders,
+            source,
+            transfers,
+            validateSender,
+        });
+        assertChallengeBoundMemo(matchedLogs, {
+            challengeId: challenge.id,
+            realm: challenge.realm,
+        });
+        // The payer is the account the matched transfers debited, not the submitter.
+        // Settlement-contract transfers are funded by the transaction sender.
+        const payers = new Set(matchedLogs.map(({ args }) => (settlementSenders.some((settlementSender) => TempoAddress.isEqual(settlementSender, args.from))
+            ? receipt.from
+            : args.from).toLowerCase()));
+        const payer = payers.size === 1 ? [...payers][0] : undefined;
+        return { payer, receipt, sender, transfers };
+    }
+    /**
+     * Validates a payment that a Zone withdrawal settled on Tempo: the portal's
+     * `WithdrawalProcessed` event pays the recipient, and the withdrawal's memo in
+     * the `processWithdrawals` calldata binds it to this challenge.
+     */
+    async function validateZoneCredential(payload, context) {
+        const { amount, challenge, client, currency, methodDetails, recipient, supportedModes } = context;
+        if (supportedModes && !supportedModes.includes('push'))
+            throw new MismatchError('Zone credentials are not supported for this challenge.', {});
+        if (!Zone.isAccepted(methodDetails?.zones, payload.zoneId))
+            throw new MismatchError('Zone is not accepted for this challenge.', {
+                zoneId: String(payload.zoneId),
+            });
+        if (methodDetails?.splits)
+            throw new MismatchError('Zone credentials do not support split payments.', {});
+        const portal = Zone.portalAddress(payload.zoneId);
+        const senderTag = payload.senderTag;
+        const hash = payload.hash;
+        const receipt = await getTransactionReceipt(client, { hash });
+        if (receipt.status !== 'success')
+            throw new MismatchError('Payment verification failed: settlement transaction reverted.', {
+                hash,
+            });
+        const event = Zone.findProcessedEvent(receipt, { portal, senderTag });
+        if (!event)
+            throw new MismatchError('Payment verification failed: Zone withdrawal not settled.', {
+                senderTag,
+            });
+        if (!event.callbackSuccess)
+            throw new MismatchError('Payment verification failed: Zone withdrawal bounced.', {
+                senderTag,
+            });
+        // The event has no memo, so the calldata's withdrawal shows what was paid and for which challenge.
+        const transaction = await getTransaction(client, { hash });
+        const calls = transaction.calls ??
+            (transaction.to ? [{ to: transaction.to, data: transaction.input }] : []);
+        const withdrawal = Zone.findWithdrawal(calls, { portal, senderTag });
+        if (!withdrawal ||
+            withdrawal.gasLimit !== 0n ||
+            !TempoAddress.isEqual(withdrawal.to, recipient) ||
+            !TempoAddress.isEqual(withdrawal.token, currency) ||
+            withdrawal.amount.toString() !== amount)
+            throw new MismatchError('Payment verification failed: Zone withdrawal not found.', {
+                senderTag,
+            });
+        if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
+            throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' });
+        return { hash, portal, receipt, senderTag };
+    }
+    async function validateProofCredential(credential, payload, context) {
+        const { chainId, challenge, client, isZeroAmount } = context;
+        if (!isZeroAmount)
+            throw new MismatchError('Proof credentials are only valid for zero-amount challenges.', {});
+        const expectedSource = credential.source;
+        if (!expectedSource)
+            throw new MismatchError('Proof credential must include a source.', {});
+        const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId;
+        const source = Proof.parsePkhSource(expectedSource);
+        if (!source || source.chainId !== resolvedChainId)
+            throw new MismatchError('Proof credential source is invalid.', {});
+        const valid = await verifyTypedData(client, {
+            address: source.address,
+            ...Proof.typedData({
+                account: source.address,
+                chainId: resolvedChainId,
+                challengeId: challenge.id,
+                realm: challenge.realm,
+            }),
+            signature: payload.signature,
+        });
+        if (!valid) {
+            const proofSigner = recoverAuthorizedProofSigner({
+                chainId: resolvedChainId,
+                challengeId: challenge.id,
+                realm: challenge.realm,
+                signature: payload.signature,
+                sourceAddress: source.address,
+            });
+            const authorized = proofSigner
+                ? await isActiveAccessKey(client, { accessKey: proofSigner, account: source.address })
+                : false;
+            if (!authorized)
+                throw new MismatchError('Proof signature does not match source.', {});
+        }
+        return { sender: source.address };
+    }
+    async function validateTransactionCredential(credential, payload, request, context) {
+        const { amount, chainId, challenge, client, methodDetails, recipient, requestAllowsFeePayer, supportedModes, } = context;
+        if (supportedModes && !supportedModes.includes('pull'))
+            throw new MismatchError('Transaction credentials are not supported for this challenge.', {});
+        const serializedTransaction = payload.signature;
+        if (!FeePayer.isTempoTransaction(serializedTransaction))
+            throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {});
+        const transaction = Transaction.deserialize(serializedTransaction);
+        if (!transaction.signature || !transaction.from)
+            throw new MismatchError('Transaction must be signed by the sender before fee payer co-signing.', {});
+        if (credential.source) {
+            const source = Proof.parsePkhSource(credential.source);
+            const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId ?? client.chain?.id;
+            if (!source || source.chainId !== resolvedChainId)
+                throw new MismatchError('Transaction credential source is invalid.', {});
+            if (!TempoAddress.isEqual(source.address, transaction.from))
+                throw new MismatchError('Transaction credential source does not match the sender.', {});
+        }
+        const isFeePayerTx = methodDetails?.feePayer === true &&
+            requestAllowsFeePayer &&
+            !!(Account.is(request.feePayer) ? request.feePayer : feePayer || remoteFeePayer);
+        const transfers = getExpectedTransfers({ amount, methodDetails, recipient });
+        const { settlementSenders, fundingCurrency } = validatePaymentRoute(transaction.calls ?? [], context, transfers, isFeePayerTx);
+        if (isFeePayerTx) {
+            FeePayer.assertAllowedFeeToken(transaction, context.allowedFeeTokens);
+        }
+        else {
+            await viem_call(client, FeePayer.simulationTransaction(transaction, { feePayer: false }));
+        }
+        return {
+            fundingCurrency,
+            isFeePayerTx,
+            serializedTransaction,
+            settlementSenders,
+            transaction,
+            transfers,
+        };
+    }
+    async function validateCredential(credential, request, context) {
+        switch (context.payload.type) {
+            case 'hash': {
+                const { payer, receipt, sender, transfers } = await validateHashCredential(credential, context.payload, context);
+                return {
+                    details: { mode: 'push', sender, transfers },
+                    hash: context.payload.hash,
+                    payer,
+                    receipt,
+                    type: 'hash',
+                };
+            }
+            case 'proof': {
+                const { sender } = await validateProofCredential(credential, context.payload, context);
+                return {
+                    details: { mode: 'proof', sender },
+                    payer: sender,
+                    type: 'proof',
+                };
+            }
+            case 'zone': {
+                const { hash, portal, receipt, senderTag } = await validateZoneCredential(context.payload, context);
+                return {
+                    details: { mode: 'push' },
+                    hash,
+                    payer: undefined,
+                    portal,
+                    receipt,
+                    senderTag,
+                    type: 'zone',
+                };
+            }
+            case 'transaction': {
+                const { fundingCurrency, isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers, } = await validateTransactionCredential(credential, context.payload, request, context);
+                return {
+                    details: {
+                        mode: 'pull',
+                        sender: transaction.from,
+                        serializedTransaction,
+                        transfers,
+                    },
+                    fundingCurrency,
+                    isFeePayerTx,
+                    payer: transaction.from,
+                    serializedTransaction,
+                    settlementSenders,
+                    transaction,
+                    transfers,
+                    type: 'transaction',
+                };
+            }
+        }
+    }
+    const method = Method.toServer(Methods.charge, {
+        canOffer: parameters.canOffer,
+        onPaymentSuccess: parameters.onPaymentSuccess,
+        defaults: {
+            machineTokenEnabled,
+            amount,
+            currency,
+            decimals,
+            description,
+            externalId,
+            recipient,
+            splits,
+            supportedModes,
+            zones,
+        },
+        stableBinding: chargeBinding,
+        html: html
+            ? {
+                config: {},
+                content: async () => (await import('./internal/html.gen.js')).html,
+                formatAmount: async (request) => {
+                    try {
+                        const chainId = request.methodDetails?.chainId;
+                        if (chainId === undefined)
+                            throw new Error('no chainId');
+                        const client = await getClient({ chainId });
+                        const metadata = await Actions.token.getMetadata(client, {
+                            token: request.currency,
+                        });
+                        const symbol = new Intl.NumberFormat('en', {
+                            style: 'currency',
+                            currency: metadata.currency,
+                            currencyDisplay: 'narrowSymbol',
+                        })
+                            .formatToParts(0)
+                            .find((p) => p.type === 'currency')?.value ?? metadata.currency;
+                        return `${symbol}${formatUnits(BigInt(request.amount), metadata.decimals)}`;
+                    }
+                    catch {
+                        return `$${request.amount}`;
+                    }
+                },
+                text: typeof html === 'object' ? html.text : undefined,
+                theme: typeof html === 'object' ? html.theme : undefined,
+            }
+            : undefined,
+        // TODO: dedupe `{charge,session}.request`
+        async request({ credential, expires, request }) {
+            const chainId = await (async () => {
+                if (request.chainId)
+                    return request.chainId;
+                if (parameters.chainId !== undefined)
+                    return parameters.chainId;
+                if (parameters.testnet)
+                    return defaults.chainId.testnet;
+                return (await getClient({})).chain?.id;
+            })();
+            const client = await (async () => {
+                try {
+                    return await getClient({ chainId });
+                }
+                catch {
+                    throw new Error(`No client configured with chainId ${chainId}.`);
+                }
+            })();
+            if (client.chain?.id !== chainId)
+                throw new Error(`Client not configured with chainId ${chainId}.`);
+            if (MachineTokenCharge.isMachineToken({
+                chainId,
+                currency: request.currency,
+            }))
+                throw new Error('MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.');
+            if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
+                throw new Error(`Machine tokens are not supported on chainId ${chainId}.`);
+            const resolvedFeePayer = (() => {
+                if (request.feePayer === false)
+                    return credential ? false : undefined;
+                const account = Account.is(request.feePayer) ? request.feePayer : feePayer;
+                if (credential)
+                    return account ?? (remoteFeePayer ? true : undefined);
+                return account || remoteFeePayer ? true : undefined;
+            })();
+            // Issued sponsored challenges must leave room for the fee payer's
+            // minimum remaining validity, or every credential for them is rejected.
+            // Zero-amount proofs and push-only routes never use the fee payer.
+            const modes = (request.supportedModes ?? supportedModes);
+            if (!credential &&
+                resolvedFeePayer &&
+                Number(request.amount) > 0 &&
+                (modes === undefined || modes.includes('pull')) &&
+                expires !== undefined &&
+                !(Date.parse(expires) - Date.now() >= defaults.minRemainingValiditySeconds * 1000))
+                throw new Error(`Sponsored charge challenges must expire at least ${defaults.minRemainingValiditySeconds} seconds after issuance.`);
+            return {
+                ...request,
+                machineTokenEnabled: request.machineTokenEnabled || undefined,
+                chainId,
+                feePayer: resolvedFeePayer,
+            };
+        },
+        async validate({ credential, request }) {
+            const context = await resolveCredentialContext({ credential, request });
+            const validated = await validateCredential(credential, request, context);
+            return {
+                challenge: context.challenge,
+                credential,
+                details: validated.details,
+                intent: 'charge',
+                method: 'tempo',
+                payer: validated.payer,
+                request: context.resolvedRequest,
+                source: credential.source,
+            };
+        },
+        async broadcast({ credential, request }) {
+            const context = await resolveCredentialContext({ credential, request });
+            const { amount, chainId, challenge, client, currency, methodDetails, recipient, requestAllowsFeePayer, } = context;
+            const validated = await validateCredential(credential, request, context);
+            const feePayerAccount = methodDetails?.feePayer === true && requestAllowsFeePayer
+                ? Account.is(request.feePayer)
+                    ? request.feePayer
+                    : feePayer
+                : undefined;
+            const expires = challenge.expires;
+            Expires.assert(expires, challenge.id);
+            const replayExpires = Date.parse(expires);
+            switch (validated.type) {
+                case 'hash': {
+                    const { hash, receipt } = validated;
+                    if (!(await tryClaimHash(store, hash, replayExpires))) {
+                        throw new CredentialReplayedError({
+                            reason: 'Transaction hash has already been used',
+                        });
+                    }
+                    // Only final hash receipts need this lookup; validation stays receipt-only.
+                    const transaction = await getTransaction(client, { hash }).catch(() => undefined);
+                    let fundingCurrency;
+                    if (transaction && TempoAddress.isEqual(transaction.from, validated.details.sender)) {
+                        try {
+                            fundingCurrency = validatePaymentRoute(transaction.calls ??
+                                (transaction.to ? [{ to: transaction.to, data: transaction.input }] : []), context, validated.details.transfers).fundingCurrency;
+                        }
+                        catch {
+                            // Unrecognized calls do not invalidate an already verified payment.
+                        }
+                    }
+                    return toReceipt(receipt.transactionHash, fundingCurrency);
+                }
+                case 'zone': {
+                    const { portal, receipt, senderTag } = validated;
+                    if (!(await tryClaimZoneWithdrawal(store, portal, senderTag, replayExpires))) {
+                        throw new CredentialReplayedError({
+                            reason: 'Zone withdrawal has already been used',
+                        });
+                    }
+                    return toReceipt(receipt.transactionHash);
+                }
+                case 'proof': {
+                    if (proofStore && !(await tryClaimProof(proofStore, challenge.id, replayExpires))) {
+                        throw new CredentialReplayedError({
+                            reason: 'Proof credential has already been used',
+                        });
+                    }
+                    Expires.assert(expires, challenge.id);
+                    return toReceipt(challenge.id);
+                }
+                case 'transaction': {
+                    const { fundingCurrency, isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers, } = validated;
+                    // Pre-broadcast dedup: catch exact byte-for-byte replays early.
+                    const hash = keccak256(serializedTransaction);
+                    if (!(await tryClaimHash(store, hash, replayExpires))) {
+                        throw new CredentialReplayedError({
+                            reason: 'Transaction hash has already been used',
+                        });
+                    }
+                    let broadcastAttempted = false;
+                    let finalHash;
+                    // Set only after this request claims the final hash, so cleanup never
+                    // releases a marker that another request holds.
+                    let claimedFinalHash;
+                    let reservation;
+                    try {
+                        const { allowedFeeTokens } = context;
+                        const completedTransaction = await (async () => {
+                            if (feePayerAccount && methodDetails?.feePayer !== false) {
+                                const selectableFeeTokens = allowedFeeTokens ?? FeePayer.defaultAllowedFeeTokens(chainId);
+                                const completed = await FeePayer.preflightSponsorship({
+                                    policy: transactionFeePayerPolicy,
+                                    transaction,
+                                    simulate: (request) => viem_call(client, request),
+                                    async complete() {
+                                        const feeToken = configuredFeeToken ??
+                                            (await resolveFeeToken({
+                                                account: feePayerAccount.address,
+                                                allowedTokens: selectableFeeTokens,
+                                                candidateTokens: selectableFeeTokens,
+                                                client,
+                                                prioritizeCandidates: true,
+                                            }));
+                                        const sponsored = FeePayer.prepareSponsoredTransaction({
+                                            account: feePayerAccount,
+                                            allowedFeeTokens: selectableFeeTokens,
+                                            challengeExpires: expires,
+                                            chainId: chainId ?? client.chain.id,
+                                            details: { amount, currency, recipient },
+                                            policy: transactionFeePayerPolicy,
+                                            transaction: {
+                                                ...transaction,
+                                                ...(feeToken ? { feeToken } : {}),
+                                            },
+                                        });
+                                        return { feePayer: feePayerAccount.address, transaction: sponsored };
+                                    },
+                                });
+                                FeePayer.assertTransactionPolicy({
+                                    challengeExpires: expires,
+                                    chainId: chainId ?? client.chain.id,
+                                    details: { amount, currency, recipient },
+                                    policy: transactionFeePayerPolicy,
+                                    transaction: completed.transaction,
+                                });
+                                return {
+                                    serializedTransaction: await signTransaction(client, completed.transaction),
+                                    sponsor: completed.feePayer,
+                                };
+                            }
+                            if (remoteFeePayer && isFeePayerTx) {
+                                const completed = await FeePayer.preflightSponsorship({
+                                    transaction,
+                                    simulate: (request) => viem_call(client, request),
+                                    async complete() {
+                                        const hosted = await FeePayer.fillHostedFeePayerTransaction({
+                                            allowedFeeTokens,
+                                            challengeExpires: expires,
+                                            chainId: chainId ?? client.chain.id,
+                                            details: { amount, currency, recipient },
+                                            policy: transactionFeePayerPolicy,
+                                            request: (args) => client.request(args),
+                                            transaction,
+                                        });
+                                        return { ...hosted, transaction };
+                                    },
+                                });
+                                return {
+                                    serializedTransaction: completed.serializedTransaction,
+                                    sponsor: completed.feePayer,
+                                };
+                            }
+                            return { serializedTransaction, sponsor: undefined };
+                        })();
+                        // Nodes normalize accepted signature encodings before deriving transaction hashes.
+                        // Broadcast the same canonical envelope so replay keys match the node reference.
+                        const serializedTransaction_final = await Transaction.serialize(Transaction.deserialize(completedTransaction.serializedTransaction));
+                        finalHash = keccak256(serializedTransaction_final);
+                        if (finalHash.toLowerCase() !== hash.toLowerCase()) {
+                            if (!(await tryClaimHash(store, finalHash, replayExpires)))
+                                throw new CredentialReplayedError({
+                                    reason: 'Transaction hash has already been used',
+                                });
+                            claimedFinalHash = finalHash;
+                        }
+                        if (isFeePayerTx) {
+                            const sponsor = completedTransaction.sponsor;
+                            if (!sponsor)
+                                throw new VerificationFailedError({
+                                    reason: 'Sponsored transaction has no configured fee payer',
+                                });
+                            const reservationChainId = chainId ?? client.chain.id;
+                            const { totalFee, validBeforeValue } = FeePayer.assertTransactionPolicy({
+                                challengeExpires: expires,
+                                chainId: reservationChainId,
+                                details: { amount, currency, recipient },
+                                policy: transactionFeePayerPolicy,
+                                transaction,
+                            });
+                            const expiresAt = validBeforeValue * 1_000;
+                            const waitUntil = Math.min(expiresAt, expires ? Date.parse(expires) : Number.MAX_SAFE_INTEGER);
+                            if (sponsorBudgetStore)
+                                reservation = await SponsorBudget.reserve(sponsorBudgetStore, {
+                                    chainId: reservationChainId,
+                                    expiresAt,
+                                    fee: totalFee,
+                                    getReceipt: (transactionHash) => getTransactionReceipt(client, { hash: transactionHash }),
+                                    id: finalHash.toLowerCase(),
+                                    maxReservations: maxInFlightReservations,
+                                    maxTotalFee: maxInFlightTotalFee,
+                                    owner: globalThis.crypto.randomUUID(),
+                                    sponsor,
+                                    transactionHash: finalHash,
+                                    waitUntil,
+                                });
+                            Expires.assert(challenge.expires, challenge.id);
+                        }
+                        // Pre-broadcast simulation for non-sponsored transactions.
+                        if (!isFeePayerTx)
+                            await viem_call(client, FeePayer.simulationTransaction(transaction, { feePayer: false }));
+                        if (reservation &&
+                            !(await SponsorBudget.transition(sponsorBudgetStore, reservation, 'broadcasting')))
+                            throw new VerificationFailedError({
+                                reason: 'Sponsor budget reservation ownership was lost before broadcast',
+                            });
+                        if (isFeePayerTx)
+                            FeePayer.assertTransactionPolicy({
+                                challengeExpires: expires,
+                                chainId: chainId ?? client.chain.id,
+                                details: { amount, currency, recipient },
+                                policy: transactionFeePayerPolicy,
+                                transaction,
+                            });
+                        // Authorize before the irreversible send; expiry must not turn a paid
+                        // request into a fresh payment challenge while settlement completes.
+                        Expires.assert(expires, challenge.id);
+                        broadcastAttempted = true;
+                        if (waitForConfirmation) {
+                            const start = Date.now();
+                            // The sync send gets at most 2/3 of the budget, reserving the rest for recovery.
+                            const sendTimeoutMs = Math.floor((confirmationTimeoutMs * 2) / 3);
+                            const deadline = start + confirmationTimeoutMs;
+                            // An expiring transaction can no longer be included after this point.
+                            const validUntil = transaction.validBefore === undefined
+                                ? Number.POSITIVE_INFINITY
+                                : transaction.validBefore * 1_000 + 2_000;
+                            let receipt;
+                            try {
+                                receipt = await withDeadline(sendRawTransactionSync(client, {
+                                    serializedTransaction: serializedTransaction_final,
+                                    timeout: sendTimeoutMs,
+                                }), start + sendTimeoutMs, new WaitForTransactionReceiptTimeoutError({ hash: finalHash }));
+                            }
+                            catch (broadcastError) {
+                                if (!isAmbiguousBroadcastError(broadcastError))
+                                    throw broadcastError;
+                                // The node may have accepted the transaction, so poll for its receipt.
+                                const timeout = Math.min(deadline, validUntil) - Date.now();
+                                let recovered;
+                                if (timeout > 0)
+                                    recovered = await waitForTransactionReceipt(client, {
+                                        checkReplacement: false,
+                                        hash: finalHash,
+                                        timeout,
+                                    }).catch(() => undefined);
+                                // When the validity cap ends polling, a transaction mined just before
+                                // `validBefore` may only now be visible, so look it up exactly once more.
+                                if (!recovered && validUntil < deadline)
+                                    recovered = await withDeadline(getTransactionReceipt(client, { hash: finalHash }), Math.max(deadline, Date.now() + client.pollingInterval), broadcastError).catch(() => undefined);
+                                if (!recovered)
+                                    throw new BroadcastOutcomeUnknownError({
+                                        cause: broadcastError,
+                                        transactionHash: finalHash,
+                                        validBefore: transaction.validBefore,
+                                    });
+                                receipt = recovered;
+                            }
+                            if (reservation)
+                                await SponsorBudget.release(sponsorBudgetStore, reservation);
+                            const matchedLogs = await assertTransferLogs(receipt, {
+                                currency,
+                                sender: transaction.from,
+                                settlementSenders,
+                                transfers,
+                            });
+                            assertChallengeBoundMemo(matchedLogs, {
+                                challengeId: challenge.id,
+                                realm: challenge.realm,
+                            });
+                            if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
+                                throw new VerificationFailedError({
+                                    reason: 'Broadcast transaction hash does not match the signed transaction',
+                                });
+                            return toReceipt(receipt.transactionHash, fundingCurrency);
+                        }
+                        // Optimistic path: broadcast without waiting for confirmation
+                        // (simulation above already ran). The returned receipt assumes
+                        // success — callers opt in via waitForConfirmation: false.
+                        const transactionHash = finalHash;
+                        const reference = await sendRawTransaction(client, {
+                            serializedTransaction: serializedTransaction_final,
+                        }).catch((broadcastError) => {
+                            // Without a receipt wait, an ambiguous failure leaves the outcome to the caller.
+                            if (!isAmbiguousBroadcastError(broadcastError))
+                                throw broadcastError;
+                            throw new BroadcastOutcomeUnknownError({
+                                cause: broadcastError,
+                                transactionHash,
+                                validBefore: transaction.validBefore,
+                            });
+                        });
+                        if (reference.toLowerCase() !== finalHash.toLowerCase())
+                            throw new VerificationFailedError({
+                                reason: 'Broadcast transaction hash does not match the signed transaction',
+                            });
+                        if (reservation &&
+                            !(await SponsorBudget.transition(sponsorBudgetStore, reservation, 'pending')))
+                            throw new VerificationFailedError({
+                                reason: 'Sponsor budget reservation ownership was lost after broadcast',
+                            });
+                        return toReceipt(reference, fundingCurrency);
+                    }
+                    catch (error) {
+                        if (reservation) {
+                            try {
+                                // A broadcast transaction may still land, so its fee stays reserved
+                                // until reconciliation observes a receipt or the reservation expires.
+                                if (broadcastAttempted)
+                                    await SponsorBudget.transition(sponsorBudgetStore, reservation, 'pending');
+                                else
+                                    await SponsorBudget.release(sponsorBudgetStore, reservation);
+                            }
+                            catch (budgetError) {
+                                // The reservation expires on its own; the settlement error and
+                                // claim cleanup take precedence.
+                                console.error('mppx: sponsor budget cleanup error', budgetError);
+                            }
+                        }
+                        // Only a successful settlement consumes the credential. A signed
+                        // transaction can be mined at most once, so a retry re-broadcasts it
+                        // and recovers the receipt instead of being rejected as a replay.
+                        if (claimedFinalHash)
+                            await releaseHashUse(store, claimedFinalHash);
+                        await releaseHashUse(store, hash);
+                        throw error;
+                    }
+                }
+            }
+        },
+    });
+    return relay ? Relay.configure(method, relay) : method;
+}
+function chargeBinding(request) {
+    // Exhaustively destructure so new charge request fields require an explicit binding decision.
+    const { amount, currency, description, externalId, methodDetails, recipient, ...requestRest } = request;
+    requestRest;
+    const { chainId, feePayer, machineTokenEnabled, splits, supportedModes, zones, ...methodDetailsRest } = methodDetails ?? {};
+    methodDetailsRest;
+    void feePayer;
+    return {
+        machineTokenEnabled,
+        amount,
+        chainId,
+        currency,
+        description,
+        externalId,
+        recipient,
+        splits,
+        supportedModes,
+        zones,
+    };
+}
+function getExpectedTransfers(parameters) {
+    return Charge_internal.getTransfers({
+        amount: parameters.amount,
+        methodDetails: {
+            splits: parameters.methodDetails?.splits,
+        },
+        recipient: parameters.recipient,
+    }).map((transfer) => ({
+        ...transfer,
+        ...(!transfer.memo ? { allowAnyMemo: true } : {}),
+    }));
+}
+function assertTransferCalls(calls, parameters) {
+    const transferCalls = getTransferCalls(calls);
+    if (parameters.exactCount && transferCalls.length !== parameters.transfers.length)
+        throw new MismatchError('Invalid transaction: no matching payment call found', {
+            expectedCalls: String(parameters.transfers.length),
+            actualCalls: String(transferCalls.length),
+        });
+    // Match memo-specific transfers before wildcards to avoid greedy
+    // consumption of memo-bearing calls by allowAnyMemo entries.
+    const sorted = [...parameters.transfers].sort((a, b) => {
+        if (a.memo && !b.memo)
+            return -1;
+        if (!a.memo && b.memo)
+            return 1;
+        return 0;
+    });
+    const used = new Set();
+    const matched = [];
+    for (const expected of sorted) {
+        const matchIndex = transferCalls.findIndex((call, index) => {
+            if (used.has(index))
+                return false;
+            const decoded = decodeTransferCall(call, parameters.currency);
+            if (!decoded)
+                return false;
+            if (!TempoAddress.isEqual(decoded.recipient, expected.recipient))
+                return false;
+            if (decoded.amount !== expected.amount)
+                return false;
+            if (expected.memo) {
+                return decoded.memo?.toLowerCase() === expected.memo.toLowerCase();
+            }
+            if (expected.allowAnyMemo)
+                return true;
+            return decoded.memo === undefined;
+        });
+        if (matchIndex === -1) {
+            throw new MismatchError('Invalid transaction: no matching payment call found', {
+                amount: expected.amount,
+                currency: parameters.currency,
+                recipient: expected.recipient,
+            });
+        }
+        used.add(matchIndex);
+        matched.push(decodeTransferCall(transferCalls[matchIndex], parameters.currency));
+    }
+    return matched;
+}
+function getTransferCalls(calls) {
+    const selectors = calls.map((call) => call.data?.slice(0, 10));
+    const offset = selectors[0] === Selectors.approve && selectors[1] === Selectors.swapExactAmountOut ? 2 : 0;
+    const transferCalls = calls.slice(offset);
+    if (transferCalls.length === 0 ||
+        selectors
+            .slice(offset)
+            .some((selector) => selector !== Selectors.transfer && selector !== Selectors.transferWithMemo)) {
+        throw new MismatchError('Invalid transaction: no matching payment call found', {});
+    }
+    return transferCalls;
+}
+function decodeTransferCall(call, currency) {
+    if (!call.to || !TempoAddress.isEqual(call.to, currency) || !call.data)
+        return null;
+    try {
+        const selector = call.data.slice(0, 10);
+        if (selector === Selectors.transfer) {
+            const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data });
+            const [recipient, amount] = args;
+            return { amount: amount.toString(), recipient };
+        }
+        if (selector === Selectors.transferWithMemo) {
+            const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data });
+            const [recipient, amount, memo] = args;
+            return { amount: amount.toString(), memo, recipient };
+        }
+    }
+    catch {
+        return null;
+    }
+    return null;
+}
+async function assertTransferLogs(receipt, parameters) {
+    if (receipt.status !== 'success')
+        throw new Error(`Transaction reverted: ${receipt.transactionHash}`);
+    const logs = getTransferLogEffects(receipt);
+    const used = new Set();
+    const matched = [];
+    // Match memo-specific transfers before wildcards to avoid greedy
+    // consumption of memo-bearing logs by allowAnyMemo entries.
+    const sorted = [...parameters.transfers].sort((a, b) => {
+        if (a.memo && !b.memo)
+            return -1;
+        if (!a.memo && b.memo)
+            return 1;
+        return 0;
+    });
+    for (const transfer of sorted) {
+        let matchIndex = -1;
+        for (const [index, log] of logs.entries()) {
+            if (used.has(index))
+                continue;
+            if (!TempoAddress.isEqual(log.address, parameters.currency))
+                continue;
+            if (!TempoAddress.isEqual(log.args.to, transfer.recipient))
+                continue;
+            if (log.args.amount.toString() !== transfer.amount)
+                continue;
+            const memoMatches = (() => {
+                if (transfer.memo)
+                    return log.kind === 'memo' && log.args.memo.toLowerCase() === transfer.memo.toLowerCase();
+                if (transfer.allowAnyMemo)
+                    return log.kind === 'transfer' || log.kind === 'memo';
+                return log.kind === 'transfer';
+            })();
+            if (!memoMatches)
+                continue;
+            if (!(await isValidTransferSender({
+                expectedSender: parameters.sender,
+                sender: log.args.from,
+                settlementSenders: parameters.settlementSenders,
+                source: parameters.source,
+                transactionSender: receipt.from,
+                validateSender: parameters.validateSender,
+            })))
+                continue;
+            matchIndex = index;
+            break;
+        }
+        if (matchIndex === -1) {
+            throw new MismatchError('Payment verification failed: no matching transfer found.', {
+                amount: transfer.amount,
+                currency: parameters.currency,
+                recipient: transfer.recipient,
+            });
+        }
+        used.add(matchIndex);
+        matched.push(logs[matchIndex]);
+    }
+    return matched;
+}
+function getTransferLogEffects(receipt) {
+    const transferLogs = parseEventLogs({
+        abi: Abis.tip20,
+        eventName: 'Transfer',
+        logs: receipt.logs,
+    }).map((log) => ({
+        address: log.address,
+        args: log.args,
+        kind: 'transfer',
+        logIndex: log.logIndex,
+    }));
+    const memoLogs = parseEventLogs({
+        abi: Abis.tip20,
+        eventName: 'TransferWithMemo',
+        logs: receipt.logs,
+    }).map((log) => ({
+        address: log.address,
+        args: log.args,
+        kind: 'memo',
+        logIndex: log.logIndex,
+    }));
+    const logs = [...transferLogs, ...memoLogs].sort((a, b) => a.logIndex - b.logIndex);
+    const effects = [];
+    for (let index = 0; index < logs.length; index++) {
+        const log = logs[index];
+        const next = logs[index + 1];
+        if (next && log.kind !== next.kind && isSameTransferLog(log, next)) {
+            const memoLog = log.kind === 'memo' ? log : next.kind === 'memo' ? next : undefined;
+            if (!memoLog)
+                continue;
+            effects.push({
+                address: memoLog.address,
+                args: memoLog.args,
+                kind: 'memo',
+            });
+            index++;
+            continue;
+        }
+        effects.push({
+            address: log.address,
+            args: log.args,
+            kind: log.kind,
+        });
+    }
+    return effects;
+}
+function isSameTransferLog(a, b) {
+    return (TempoAddress.isEqual(a.address, b.address) &&
+        TempoAddress.isEqual(a.args.from, b.args.from) &&
+        TempoAddress.isEqual(a.args.to, b.args.to) &&
+        a.args.amount === b.args.amount &&
+        Math.abs(a.logIndex - b.logIndex) === 1);
+}
+async function isValidTransferSender(parameters) {
+    if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender))
+        return true;
+    if (TempoAddress.isEqual(parameters.transactionSender, parameters.expectedSender) &&
+        parameters.settlementSenders?.some((sender) => TempoAddress.isEqual(parameters.sender, sender)))
+        return true;
+    if (!parameters.validateSender)
+        return false;
+    return parameters.validateSender({
+        expectedSender: parameters.expectedSender,
+        sender: parameters.sender,
+        source: parameters.source,
+    });
+}
+/** @internal */
+function getHashStoreKey(hash) {
+    return `mppx:charge:${hash.toLowerCase()}`;
+}
+/** @internal */
+function getProofStoreKey(challengeId) {
+    return `mppx:charge:proof:${challengeId}`;
+}
+/** @internal */
+function getZoneWithdrawalStoreKey(portal, senderTag) {
+    return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`;
+}
+async function tryClaimZoneWithdrawal(store, portal, senderTag, expires) {
+    return Store.tryClaim(store, getZoneWithdrawalStoreKey(portal, senderTag), expires);
+}
+async function tryClaimHash(store, hash, expires) {
+    return Store.tryClaim(store, getHashStoreKey(hash), expires);
+}
+/** @internal */
+async function releaseHashUse(store, hash) {
+    await store.delete(getHashStoreKey(hash));
+}
+function parseHashCredentialSource(parameters) {
+    const { chainId, source } = parameters;
+    if (!source)
+        return undefined;
+    const parsed = Proof.parsePkhSource(source);
+    if (!parsed || (chainId !== undefined && parsed.chainId !== chainId)) {
+        throw new MismatchError('Hash credential source is invalid.', {});
+    }
+    return parsed;
+}
+/** @internal */
+async function tryClaimProof(store, challengeId, expires) {
+    return Store.tryClaim(store, getProofStoreKey(challengeId), expires);
+}
+function recoverAuthorizedProofSigner(parameters) {
+    const { chainId, challengeId, realm, signature, sourceAddress } = parameters;
+    try {
+        const envelope = SignatureEnvelope.from(signature);
+        const proofHash = Proof.hash({ account: sourceAddress, chainId, challengeId, realm });
+        if (envelope.type === 'keychain') {
+            if (!TempoAddress.isEqual(envelope.userAddress, sourceAddress))
+                return null;
+            const keychainPayload = envelope.version === 'v2'
+                ? keccak256(`0x04${proofHash.slice(2)}${sourceAddress.slice(2)}`)
+                : proofHash;
+            const signer = SignatureEnvelope.extractAddress({
+                payload: keychainPayload,
+                signature: envelope.inner,
+            });
+            const valid = SignatureEnvelope.verify(envelope.inner, {
+                address: signer,
+                payload: keychainPayload,
+            });
+            if (!valid)
+                return null;
+            return signer;
+        }
+        const signer = SignatureEnvelope.extractAddress({
+            payload: proofHash,
+            signature: envelope,
+        });
+        const valid = SignatureEnvelope.verify(envelope, {
+            address: signer,
+            payload: proofHash,
+        });
+        if (!valid)
+            return null;
+        return signer;
+    }
+    catch {
+        return null;
+    }
+}
+async function isActiveAccessKey(client, parameters) {
+    try {
+        const metadata = await Actions.accessKey.getMetadata(client, parameters);
+        const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+        return !metadata.isRevoked && metadata.expiry > nowSeconds;
+    }
+    catch {
+        return false;
+    }
+}
+const ambiguousErrorNames = new Set([
+    'AbortError',
+    'SocketClosedError',
+    'TimeoutError',
+    'WaitForTransactionReceiptTimeoutError',
+]);
+/**
+ * Whether a failed synchronous broadcast may still have reached the mempool,
+ * so its receipt is worth polling for. Every other error is a definitive
+ * rejection (e.g. method not found, invalid params, insufficient funds).
+ *
+ * Ambiguous outcomes, matched anywhere in the `cause` chain:
+ * - Timeouts and aborts: errors named `TimeoutError` or `AbortError`, or the
+ *   local confirmation deadline (`WaitForTransactionReceiptTimeoutError`).
+ * - Lost connections: `SocketClosedError`, or an `HttpRequestError` with no
+ *   status (network failure) or a 5xx status.
+ * - JSON-RPC code `4`: the EIP-7966 timeout for a pooled, unconfirmed transaction.
+ * - Messages containing the words "already known" or "known transaction": already
+ *   pooled ("unknown transaction type" does not match).
+ * - Tempo's `ExpiringNonceReplay`: an expiring-nonce transaction with this hash was
+ *   already accepted, such as when a transport retries a send the node took.
+ */
+function isAmbiguousBroadcastError(error) {
+    for (let cause = error; cause; cause = cause.cause) {
+        if (typeof cause !== 'object')
+            return false;
+        const { code, message, name, status } = cause;
+        if (name === 'HttpRequestError')
+            return status === undefined || Number(status) >= 500;
+        if (ambiguousErrorNames.has(name))
+            return true;
+        if (code === 4)
+            return true;
+        if (typeof message === 'string' &&
+            /\balready ?known\b|\bknown transaction\b|\bExpiringNonceReplay\b/i.test(message))
+            return true;
+    }
+    return false;
+}
+/** Rejects with `error` if `promise` has not settled by `deadline` (epoch ms). */
+async function withDeadline(promise, deadline, error) {
+    let timer;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(error), deadline - Date.now());
+            }),
+        ]);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+/** @internal */
+function toReceipt(reference, fundingCurrency) {
+    return {
+        ...(fundingCurrency ? { fundingCurrency } : {}),
+        method: 'tempo',
+        status: 'success',
+        timestamp: new Date().toISOString(),
+        reference,
+    };
+}
+function assertChallengeBoundMemo(matchedLogs, parameters) {
+    const memos = matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined));
+    // The transfer already settled to the recipient, so another payment would not help.
+    if (!isChallengeBound(memos, parameters))
+        throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' });
+}
+function assertChallengeBoundCallMemo(matchedCalls, parameters) {
+    const memos = matchedCalls.map((call) => call.memo);
+    if (!isChallengeBound(memos, parameters))
+        throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {});
+}
+/**
+ * Whether matched payment transfers carry a challenge-bound attribution memo and
+ * no conflicting attribution. Otherwise, a split payment could authorize another
+ * challenge after the first challenge's replay marker expires. Unmatched transfers
+ * cannot establish the binding; plain transfers and non-MPP memos remain allowed.
+ * @internal
+ */
+function isChallengeBound(memos, parameters) {
+    let bound = false;
+    for (const memo of memos) {
+        if (!memo || !Attribution.isMppMemo(memo))
+            continue;
+        if (!Attribution.verifyServer(memo, parameters.realm) ||
+            !Attribution.verifyChallengeBinding(memo, parameters.challengeId))
+            return false;
+        bound = true;
+    }
+    return bound;
+}
+/** @internal */
+class MismatchError extends PaymentError {
+    name = 'MismatchError';
+    title = 'Verification Failed';
+    type = 'https://paymentauth.org/problems/verification-failed';
+    constructor(reason, details) {
+        super([
+            reason.startsWith('Payment verification failed')
+                ? reason
+                : `Payment verification failed: ${reason}`,
+            ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`),
+        ].join('\n'), { details });
+    }
+}
+//# sourceMappingURL=Charge.js.map

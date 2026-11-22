@@ -1,0 +1,18 @@
+import type { AppManifest } from './schema.ts';
+export declare function appPageUrl(manifest: AppManifest): string;
+/**
+ * The host the app's page loads from, like `podcast.example.com`.
+ * This is where the app runs. It can differ from where the manifest is hosted.
+ */
+export declare function servedFrom(manifest: AppManifest): string;
+export interface AppMove {
+    from: string;
+    to: string;
+}
+/**
+ * Returns the old and new host if the app moved, or null if it didn't.
+ * A new page host counts first, then a new manifest host.
+ * A new path on the same host isn't a move.
+ */
+export declare function movedBetween(approved: AppManifest, reviewed: AppManifest): AppMove | null;
+//# sourceMappingURL=served-from.d.ts.map

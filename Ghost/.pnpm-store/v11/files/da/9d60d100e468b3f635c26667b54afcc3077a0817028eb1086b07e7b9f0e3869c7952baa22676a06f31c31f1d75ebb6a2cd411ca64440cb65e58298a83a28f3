@@ -1,0 +1,53 @@
+{
+  "name": "@tryghost/app-contracts",
+  "version": "private",
+  "private": true,
+  "description": "The contracts between Ghost and apps: formats, types and validation shared by Ghost core and admin",
+  "license": "MIT",
+  "author": "Ghost Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/Ghost.git",
+    "directory": "contracts/app-contracts"
+  },
+  "files": [
+    "build"
+  ],
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./manifest": {
+      "types": "./build/manifest/index.d.ts",
+      "default": "./build/manifest/index.js"
+    },
+    "./bridge": {
+      "types": "./build/bridge/index.d.ts",
+      "default": "./build/bridge/index.js"
+    },
+    "./identity": {
+      "types": "./build/identity/index.d.ts",
+      "default": "./build/identity/index.js"
+    }
+  },
+  "dependencies": {
+    "jose": "6.2.17",
+    "zod": "4.6.7"
+  },
+  "ghostPackage": {
+    "goldenPath": "compliant"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test:unit": "NODE_ENV=testing vitest run --coverage",
+    "test": "pnpm run '/^test:/'",
+    "test:types": "tsc --noEmit -p test/tsconfig.json",
+    "lint:code": "eslint src/ --cache",
+    "lint:test": "eslint test/ --cache",
+    "lint": "pnpm run '/^lint:/'"
+  }
+}

@@ -1,0 +1,87 @@
+# @tryghost/adapter-base-scheduling
+
+## 0.2.10
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.2.9
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.2.8
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 0.2.7
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.2.6
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+## 0.2.5
+
+### Patch Changes
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+## 0.2.4
+
+### Patch Changes
+
+- Update dependency Sinon to v22.1.0
+
+## 0.2.3
+
+### Patch Changes
+
+- Bumped framework dependencies
+
+## 0.2.2
+
+### Patch Changes
+
+- Update framework dependencies
+
+- Updated logging requests to avoid process crashes on redirects.
+
+## 0.2.1
+
+### Patch Changes
+
+- Fixed the test suite type-check against the typed @tryghost/logging error signature.
+
+## 0.2.0
+
+### Minor Changes
+
+- Added support for idempotency key in scheduling adapter interface
+
+## 0.1.1
+
+### Patch Changes
+
+- Updated README documentation
+
+- Update @tryghost deps to latest

@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`a11cc7cc-e4a0-4762-b2fa-f4c31682609a`,e._sentryDebugIdIdentifier=`sentry-dbid-a11cc7cc-e4a0-4762-b2fa-f4c31682609a`)}catch{}})();import{t as e}from"./jsx-runtime-C_PdNFfk.js";import{t}from"./posts-list-screen-BZVIJLeS.js";var n=e();function r(){return(0,n.jsx)(t,{resource:`posts`})}export{r as default};
+//# debugId=a11cc7cc-e4a0-4762-b2fa-f4c31682609a

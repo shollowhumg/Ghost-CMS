@@ -1,0 +1,13 @@
+import { type FlattenedSign } from 'jose';
+import type { PublicKeyJwk } from '../manifest/keys.ts';
+/** A private Ed25519 key, in any form jose signs with: a CryptoKey, a KeyObject or a JWK. */
+export type PrivateKey = Parameters<FlattenedSign['sign']>[0];
+/**
+ * A key's RFC 7638 thumbprint: the same for a key however its JWK is written, so it is
+ * what Ghost stores to recognise a key again.
+ */
+export declare function thumbprintOf(key: PublicKeyJwk): Promise<string>;
+export declare function decodeUtf8(bytes: Uint8Array): string;
+export declare function decodeText(encoded: string): string | undefined;
+export declare function decodeJson(encoded: string): unknown;
+//# sourceMappingURL=keys.d.ts.map

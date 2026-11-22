@@ -1,0 +1,12 @@
+import { z } from 'zod';
+/**
+ * One line of plain text, as an app serves it. What shows nothing is taken off both ends, and
+ * text with nothing visible left, such as a name of Hangul fillers, is refused.
+ */
+export declare function plainText(maxLength: number): z.ZodString;
+/**
+ * One line of plain text, as Ghost stored it. Laxer than `plainText`, so a manifest stored before
+ * blank names were refused still reads, and the app can still be listed and uninstalled.
+ */
+export declare function storedText(maxLength: number): z.ZodString;
+//# sourceMappingURL=text.d.ts.map

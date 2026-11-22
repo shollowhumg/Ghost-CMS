@@ -1,0 +1,33 @@
+# @tryghost/kg-clean-basic-html
+
+## 4.3.10
+
+### Patch Changes
+
+- Updated dependencies
+
+## 4.3.9
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 4.3.8
+
+### Patch Changes
+
+- Stopped publishing the TypeScript incremental build cache (build/tsconfig.tsbuildinfo) in the npm package
+
+## 4.3.7
+
+### Patch Changes
+
+- Updated dependencies
+
+## 4.3.6
+
+### Patch Changes
+
+- Republished with npm trusted publishing and provenance; no code changes

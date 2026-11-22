@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`83e454c5-7ff4-4abe-abf8-56d91fe1b9ab`,e._sentryDebugIdIdentifier=`sentry-dbid-83e454c5-7ff4-4abe-abf8-56d91fe1b9ab`)}catch{}})();import{i as e}from"./react-DFHZ-wBR.js";import{n as t,t as n}from"./onboarding-tAspgQyv.js";var r=e({default:()=>n,useOnboardingStatus:()=>t});export{r as t};
+//# debugId=83e454c5-7ff4-4abe-abf8-56d91fe1b9ab

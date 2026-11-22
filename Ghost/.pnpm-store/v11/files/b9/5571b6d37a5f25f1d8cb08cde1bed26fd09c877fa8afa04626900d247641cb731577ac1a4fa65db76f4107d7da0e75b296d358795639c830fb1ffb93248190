@@ -1,0 +1,21 @@
+/** An event dispatched from a `text/event-stream` body. */
+export type Event = {
+    /** The event's data: its `data` field values joined by `\n`. */
+    data: string;
+    /** The event's type: its last `event` field value, or `'message'` when it has none. */
+    event: string;
+};
+/**
+ * Creates an incremental parser for a `text/event-stream` body, as the WHATWG HTML
+ * spec interprets one. Feed it decoded text chunks split anywhere; it calls `onEvent`
+ * for each event a blank line ends. Lines end in `\n`, `\r\n` or `\r`; comments (`:`),
+ * `id`, `retry` and unknown fields are ignored, and an event that never ends is not
+ * dispatched.
+ *
+ * @see https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation
+ */
+export declare function createParser(onEvent: (event: Event) => void): {
+    /** Parses the next chunk of the stream. */
+    feed(chunk: string): void;
+};
+//# sourceMappingURL=sse.d.ts.map

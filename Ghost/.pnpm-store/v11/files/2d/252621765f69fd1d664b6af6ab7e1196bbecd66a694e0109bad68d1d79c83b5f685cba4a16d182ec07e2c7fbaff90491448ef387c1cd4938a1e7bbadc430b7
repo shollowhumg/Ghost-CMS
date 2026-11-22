@@ -1,0 +1,210 @@
+import {
+  AuthCaptureEvmScheme
+} from "./chunk-YNMENULP.mjs";
+import {
+  isAuthCaptureExtra,
+  isAuthCapturePayload
+} from "./chunk-XE4FB4AB.mjs";
+import {
+  AUTH_CAPTURE_ESCROW_ADDRESS,
+  AUTH_CAPTURE_ESCROW_V1_0_ADDRESS,
+  AUTH_CAPTURE_ESCROW_V1_1_ADDRESS,
+  AUTH_CAPTURE_SCHEME,
+  EIP3009_TOKEN_COLLECTOR_ADDRESS,
+  EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  OPERATOR_REFUND_COLLECTOR_ADDRESS,
+  PERMIT2_TOKEN_COLLECTOR_ADDRESS,
+  resolveAuthCaptureDeployment
+} from "./chunk-F43KMW3I.mjs";
+import {
+  isEIP3009Payload,
+  isPermit2Payload,
+  isUptoPermit2Payload
+} from "./chunk-JK7SLLF7.mjs";
+import {
+  BatchSettlementEvmScheme
+} from "./chunk-KWP3UD2B.mjs";
+import "./chunk-W6ON4LG2.mjs";
+import "./chunk-KMH2STR2.mjs";
+import {
+  isBatchSettlementClaimPayload,
+  isBatchSettlementDepositPayload,
+  isBatchSettlementEnrichedRefundPayload,
+  isBatchSettlementRefundPayload,
+  isBatchSettlementSettlePayload,
+  isBatchSettlementVoucherPayload
+} from "./chunk-U4HCGTLU.mjs";
+import {
+  BATCH_SETTLEMENT_ADDRESS,
+  BATCH_SETTLEMENT_DOMAIN,
+  BATCH_SETTLEMENT_SCHEME,
+  ERC3009_DEPOSIT_COLLECTOR_ADDRESS,
+  claimBatchTypes,
+  refundTypes,
+  voucherTypes
+} from "./chunk-WLGT5HHY.mjs";
+import {
+  ExactEvmScheme
+} from "./chunk-GNHGHC3E.mjs";
+import {
+  DEFAULT_ASSET_CONTRACT_CACHE_TTL_MS,
+  resetAssetContractCache,
+  startAssetContractCheck,
+  validateAssetIsContract
+} from "./chunk-ESVRGOPA.mjs";
+import "./chunk-JNJGAE23.mjs";
+import {
+  classifyErc6492Payer,
+  isCanonicalEcdsaSignature,
+  isPlainNonCanonicalEcdsaSignature,
+  verifyHashSignature,
+  verifyHashSignatureWithCode,
+  verifyTypedDataSignature
+} from "./chunk-5JE2UIZP.mjs";
+import {
+  UptoEvmScheme
+} from "./chunk-4TLGHSGS.mjs";
+import {
+  createPermit2ApprovalTx,
+  getPermit2AllowanceReadParams
+} from "./chunk-2U5G4M6O.mjs";
+import "./chunk-6TBI5HDH.mjs";
+import "./chunk-LYASS525.mjs";
+import {
+  BUILDER_CODE_KEY,
+  appendDataSuffix,
+  resolveDataSuffix
+} from "./chunk-DIAR36YQ.mjs";
+import "./chunk-VS3RYAYE.mjs";
+import "./chunk-EKCH75YB.mjs";
+import {
+  DEFAULT_ASSETS,
+  findDefaultAsset,
+  getDefaultAsset
+} from "./chunk-LQQ3M4DU.mjs";
+import {
+  PERMIT2_ADDRESS,
+  authorizationTypes,
+  eip3009ABI,
+  erc20AllowanceAbi,
+  permit2WitnessTypes,
+  uptoPermit2WitnessTypes,
+  x402ExactPermit2ProxyABI,
+  x402ExactPermit2ProxyAddress,
+  x402UptoPermit2ProxyABI,
+  x402UptoPermit2ProxyAddress
+} from "./chunk-GPMYUGHX.mjs";
+
+// src/signer.ts
+function toClientEvmSigner(signer, publicClient) {
+  const readContract = signer.readContract ?? publicClient?.readContract.bind(publicClient);
+  const result = {
+    address: signer.address,
+    signTypedData: (msg) => signer.signTypedData(msg)
+  };
+  if (readContract) {
+    result.readContract = readContract;
+  }
+  const signTransaction = signer.signTransaction;
+  if (signTransaction) {
+    result.signTransaction = (args) => signTransaction(args);
+  }
+  const getTransactionCount = signer.getTransactionCount ?? publicClient?.getTransactionCount?.bind(publicClient);
+  if (getTransactionCount) {
+    result.getTransactionCount = (args) => getTransactionCount(args);
+  }
+  const estimateFeesPerGas = signer.estimateFeesPerGas ?? publicClient?.estimateFeesPerGas?.bind(publicClient);
+  if (estimateFeesPerGas) {
+    result.estimateFeesPerGas = () => estimateFeesPerGas();
+  }
+  return result;
+}
+var DEFAULT_CONFIRMATION_TIMEOUT_MS = 18e4;
+function toFacilitatorEvmSigner(client, {
+  confirmationTimeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS
+} = {}) {
+  return {
+    ...client,
+    getAddresses: () => [client.address],
+    waitForTransactionReceipt: (args) => client.waitForTransactionReceipt({ ...args, timeout: confirmationTimeoutMs })
+  };
+}
+
+// src/shared/erc7702.ts
+var ERC7702_PREFIX = "0xef0100";
+var ERC7702_BYTECODE_LENGTH = 48;
+function isERC7702Delegation(bytecode) {
+  if (!bytecode || bytecode === "0x") return false;
+  if (bytecode.length !== ERC7702_BYTECODE_LENGTH) return false;
+  return bytecode.toLowerCase().startsWith(ERC7702_PREFIX);
+}
+function getERC7702DelegateAddress(bytecode) {
+  if (!isERC7702Delegation(bytecode)) return null;
+  return "0x" + bytecode.slice(8).toLowerCase();
+}
+export {
+  AUTH_CAPTURE_ESCROW_ADDRESS,
+  AUTH_CAPTURE_ESCROW_V1_0_ADDRESS,
+  AUTH_CAPTURE_ESCROW_V1_1_ADDRESS,
+  AUTH_CAPTURE_SCHEME,
+  AuthCaptureEvmScheme,
+  BATCH_SETTLEMENT_ADDRESS,
+  BATCH_SETTLEMENT_DOMAIN,
+  BATCH_SETTLEMENT_SCHEME,
+  BUILDER_CODE_KEY,
+  BatchSettlementEvmScheme,
+  DEFAULT_ASSETS,
+  DEFAULT_ASSET_CONTRACT_CACHE_TTL_MS,
+  EIP3009_TOKEN_COLLECTOR_ADDRESS,
+  EIP3009_TOKEN_COLLECTOR_V1_0_ADDRESS,
+  ERC3009_DEPOSIT_COLLECTOR_ADDRESS,
+  ExactEvmScheme,
+  OPERATOR_REFUND_COLLECTOR_ADDRESS,
+  PERMIT2_ADDRESS,
+  PERMIT2_TOKEN_COLLECTOR_ADDRESS,
+  UptoEvmScheme,
+  appendDataSuffix,
+  authorizationTypes,
+  claimBatchTypes,
+  classifyErc6492Payer,
+  createPermit2ApprovalTx,
+  eip3009ABI,
+  erc20AllowanceAbi,
+  findDefaultAsset,
+  getDefaultAsset,
+  getERC7702DelegateAddress,
+  getPermit2AllowanceReadParams,
+  isAuthCaptureExtra,
+  isAuthCapturePayload,
+  isBatchSettlementClaimPayload,
+  isBatchSettlementDepositPayload,
+  isBatchSettlementEnrichedRefundPayload,
+  isBatchSettlementRefundPayload,
+  isBatchSettlementSettlePayload,
+  isBatchSettlementVoucherPayload,
+  isCanonicalEcdsaSignature,
+  isEIP3009Payload,
+  isERC7702Delegation,
+  isPermit2Payload,
+  isPlainNonCanonicalEcdsaSignature,
+  isUptoPermit2Payload,
+  permit2WitnessTypes,
+  refundTypes,
+  resetAssetContractCache,
+  resolveAuthCaptureDeployment,
+  resolveDataSuffix,
+  startAssetContractCheck,
+  toClientEvmSigner,
+  toFacilitatorEvmSigner,
+  uptoPermit2WitnessTypes,
+  validateAssetIsContract,
+  verifyHashSignature,
+  verifyHashSignatureWithCode,
+  verifyTypedDataSignature,
+  voucherTypes,
+  x402ExactPermit2ProxyABI,
+  x402ExactPermit2ProxyAddress,
+  x402UptoPermit2ProxyABI,
+  x402UptoPermit2ProxyAddress
+};
+//# sourceMappingURL=index.mjs.map

@@ -1,0 +1,33 @@
+# @tryghost/kg-converters
+
+## 1.2.10
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.2.9
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 1.2.8
+
+### Patch Changes
+
+- Stopped publishing the TypeScript incremental build cache (build/tsconfig.tsbuildinfo) in the npm package
+
+## 1.2.7
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.2.6
+
+### Patch Changes
+
+- Republished with npm trusted publishing and provenance; no code changes

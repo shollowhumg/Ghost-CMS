@@ -1,0 +1,79 @@
+import { type Address, type Client, type Hex, type TransactionReceipt } from 'viem';
+/** Default time a payer waits for a Zone withdrawal to settle on Tempo. */
+export declare const defaultSettlementTimeoutMs = 60000;
+/** A withdrawal as `ZonePortal.processWithdrawals` receives it on Tempo. */
+export type Withdrawal = {
+    token: Address;
+    senderTag: Hex;
+    to: Address;
+    amount: bigint;
+    memo: Hex;
+    gasLimit: bigint;
+    fallbackNonce: bigint;
+    callbackData: Hex;
+    encryptedSender: Hex;
+};
+/** A `ZonePortal.WithdrawalProcessed` event. */
+export type ProcessedEvent = {
+    to: Address;
+    senderTag: Hex;
+    token: Address;
+    amount: bigint;
+    callbackSuccess: boolean;
+};
+/** Zones a challenge accepts: a list of Zone IDs, or `true` for any Zone. */
+export type Accepted = readonly number[] | true;
+/** Returns whether a value is a valid Zone ID: a positive integer below the Zone chain ID ranges. */
+export declare function isId(zoneId: number): boolean;
+/** Returns whether a challenge's `zones` accepts withdrawals from a Zone. */
+export declare function isAccepted(zones: Accepted | undefined, zoneId: number): boolean;
+/** Returns the Tempo portal address of a Zone. */
+export declare function portalAddress(zoneId: number): Address;
+/**
+ * Derives a Zone ID from a Zone chain ID.
+ *
+ * Zones on Tempo mainnet and Moderato use reserved bases (`421700000` and
+ * `1424310000`). Zones on any other parent chain use `(parentChainId << 32) | zoneId`.
+ */
+export declare function idFromChainId(chainId: number): number;
+/**
+ * Derives the parent Tempo chain ID of a Zone chain ID, or `undefined` when
+ * the chain ID doesn't follow a known Zone scheme.
+ */
+export declare function parentChainIdFromChainId(chainId: number): number | undefined;
+/**
+ * Derives a withdrawal's sender tag, which identifies it in the
+ * `WithdrawalProcessed` event on Tempo.
+ */
+export declare function senderTag(parameters: {
+    fallbackNonce: bigint;
+    sender: Address;
+    transactionHash: Hex;
+}): Hex;
+/** Returns the `WithdrawalProcessed` event a portal emitted for a sender tag. */
+export declare function findProcessedEvent(receipt: Pick<TransactionReceipt, 'logs'>, parameters: {
+    portal: Address;
+    senderTag: Hex;
+}): ProcessedEvent | undefined;
+/**
+ * Finds the withdrawal for a sender tag in the calldata of a settlement
+ * transaction's top-level `processWithdrawals` calls to the portal.
+ */
+export declare function findWithdrawal(calls: readonly {
+    to?: Address | null | undefined;
+    data?: Hex | undefined;
+}[], parameters: {
+    portal: Address;
+    senderTag: Hex;
+}): Withdrawal | undefined;
+/**
+ * Waits until a portal emits `WithdrawalProcessed` for a sender tag and
+ * returns the Tempo transaction hash that settled it.
+ */
+export declare function waitForSettlement(client: Client, parameters: {
+    portal: Address;
+    senderTag: Hex;
+    to?: Address | undefined;
+    timeoutMs?: number | undefined;
+}): Promise<Hex>;
+//# sourceMappingURL=zone.d.ts.map

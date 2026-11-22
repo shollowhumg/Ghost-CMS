@@ -1,0 +1,152 @@
+import {
+  AUTH_CAPTURE_SCHEME,
+  computePayerAgnosticPaymentInfoHash,
+  deriveBoundSalt,
+  extraAddress,
+  generateSalt,
+  isSaltBindingOn,
+  resolveAuthCaptureDeployment,
+  signERC3009,
+  signPermit2
+} from "./chunk-F43KMW3I.mjs";
+import {
+  getEvmChainId
+} from "./chunk-EKCH75YB.mjs";
+import {
+  findDefaultAsset
+} from "./chunk-LQQ3M4DU.mjs";
+
+// src/auth-capture/client/scheme.ts
+import { hexToBigInt } from "viem";
+var AuthCaptureEvmScheme = class {
+  /**
+   * Construct a client-side auth-capture scheme bound to a specific signer.
+   *
+   * @param signer - Client-side signer that exposes `address` and `signTypedData`.
+   */
+  constructor(signer) {
+    this.signer = signer;
+    this.scheme = AUTH_CAPTURE_SCHEME;
+    this.findDefaultAsset = findDefaultAsset;
+  }
+  /**
+   * Build and sign an auth-capture payment payload for the given requirements.
+   * Validates all spec-mandated `extra` fields and the asset-transfer method
+   * (default `eip3009`, alternative `permit2`), reconstructs the on-chain
+   * PaymentInfo struct, computes its payer-agnostic hash, and returns the
+   * signed wire payload.
+   *
+   * @param x402Version - Wire protocol version; only `2` is supported.
+   * @param requirements - Resource server's payment requirements (includes scheme `extra`).
+   * @param _ - Unused FacilitatorContext (interface compatibility).
+   * @returns The signed wire payload tagged with the x402 protocol version.
+   * @throws If `x402Version !== 2` or any required `extra` field is missing.
+   */
+  async createPaymentPayload(x402Version, requirements, _) {
+    if (x402Version !== 2) {
+      throw new Error(`Unsupported x402Version: ${x402Version}. Only version 2 is supported.`);
+    }
+    const extra = requirements.extra;
+    if (!extra.name) {
+      throw new Error(
+        `EIP-712 domain parameter 'name' is required in payment requirements for asset ${requirements.asset}`
+      );
+    }
+    if (!extra.version) {
+      throw new Error(
+        `EIP-712 domain parameter 'version' is required in payment requirements for asset ${requirements.asset}`
+      );
+    }
+    if (!extra.captureAuthorizer) {
+      throw new Error(`'captureAuthorizer' is required in payment requirements extra`);
+    }
+    if (!extra.feeRecipient) {
+      throw new Error(`'feeRecipient' is required in payment requirements extra`);
+    }
+    if (typeof extra.captureDeadline !== "number") {
+      throw new Error(`'captureDeadline' is required in payment requirements extra`);
+    }
+    if (typeof extra.refundDeadline !== "number") {
+      throw new Error(`'refundDeadline' is required in payment requirements extra`);
+    }
+    if (typeof extra.minFeeBps !== "number") {
+      throw new Error(`'minFeeBps' is required in payment requirements extra`);
+    }
+    if (typeof extra.maxFeeBps !== "number") {
+      throw new Error(`'maxFeeBps' is required in payment requirements extra`);
+    }
+    if (typeof requirements.maxTimeoutSeconds !== "number") {
+      throw new Error(
+        `'maxTimeoutSeconds' is required in PaymentRequirements (used to derive preApprovalExpiry)`
+      );
+    }
+    const chainId = getEvmChainId(requirements.network);
+    const deployment = resolveAuthCaptureDeployment(extra.authCaptureEscrow);
+    if (!deployment) {
+      throw new Error(`Invalid authCaptureEscrow in payment requirements extra`);
+    }
+    const maxAmount = requirements.amount;
+    const nowSeconds = Math.floor(Date.now() / 1e3);
+    const preApprovalExpiry = nowSeconds + requirements.maxTimeoutSeconds;
+    const assetTransferMethod = extra.assetTransferMethod ?? "eip3009";
+    const bindOn = isSaltBindingOn(extra);
+    const saltNonce = generateSalt();
+    const salt = bindOn ? deriveBoundSalt(
+      extraAddress(extra.receiverAuthorizer),
+      extraAddress(extra.policy),
+      saltNonce
+    ) : saltNonce;
+    const paymentInfo = {
+      operator: extra.captureAuthorizer,
+      payer: this.signer.address,
+      receiver: requirements.payTo,
+      token: requirements.asset,
+      maxAmount,
+      preApprovalExpiry,
+      authorizationExpiry: extra.captureDeadline,
+      refundExpiry: extra.refundDeadline,
+      minFeeBps: extra.minFeeBps,
+      maxFeeBps: extra.maxFeeBps,
+      feeReceiver: extra.feeRecipient,
+      salt
+    };
+    const nonce = computePayerAgnosticPaymentInfoHash(chainId, paymentInfo, deployment.escrow);
+    if (assetTransferMethod === "permit2") {
+      const permit2Authorization = {
+        from: this.signer.address,
+        permitted: {
+          token: requirements.asset,
+          amount: maxAmount
+        },
+        spender: deployment.permit2Collector,
+        nonce: hexToBigInt(nonce).toString(),
+        deadline: String(preApprovalExpiry)
+      };
+      const signature2 = await signPermit2(this.signer, permit2Authorization, chainId);
+      const payload2 = bindOn ? { permit2Authorization, signature: signature2, salt, saltNonce } : { permit2Authorization, signature: signature2, salt };
+      return { x402Version, payload: payload2 };
+    }
+    const authorization = {
+      from: this.signer.address,
+      to: deployment.eip3009Collector,
+      value: maxAmount,
+      validAfter: "0",
+      validBefore: String(preApprovalExpiry),
+      nonce
+    };
+    const signature = await signERC3009(
+      this.signer,
+      authorization,
+      extra,
+      requirements.asset,
+      chainId
+    );
+    const payload = bindOn ? { authorization, signature, salt, saltNonce } : { authorization, signature, salt };
+    return { x402Version, payload };
+  }
+};
+
+export {
+  AuthCaptureEvmScheme
+};
+//# sourceMappingURL=chunk-YNMENULP.mjs.map

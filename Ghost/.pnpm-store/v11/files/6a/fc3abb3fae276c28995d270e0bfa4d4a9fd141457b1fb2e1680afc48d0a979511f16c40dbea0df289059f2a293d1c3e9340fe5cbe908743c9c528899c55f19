@@ -1,0 +1,92 @@
+import { type Address } from 'viem';
+import type { MaybePromise } from '../internal/types.js';
+import * as Store from '../Store.js';
+import type { TransactionClient } from '../tempo/session/precompile/Chain.js';
+import type { ResolveSessionChannelId } from '../tempo/session/server/RequestState.js';
+import { settle as settleChannel, type SettlementTransactionOptions } from '../tempo/session/server/Settlement.js';
+/**
+ * Tempo session channel storage on a {@link ChannelStore} Durable Object namespace, to spread
+ * into `tempo.session()`: `store` keeps each channel in its own object, which schedules its
+ * settlement, and `resolveChannelId` finds the payer's open channel to the same payee, token,
+ * escrow, operator and chain, so a client that lost its state resumes it instead of opening another.
+ * The lookup needs the payer's identity, which only a `bootstrap` HEAD proof supplies: enable
+ * `bootstrap` on the session and in the client's session manager, or it never resolves.
+ *
+ * The store keeps that lookup current: after a write opens, closes or finalizes a channel,
+ * it adds or removes the channel under its payer and authorized signer. Each lookup entry is
+ * its own key holding the payer's open channels there, most recent first, so closing one leaves
+ * the others findable. The lookup returns the first whose channel still resumes, so a delayed
+ * write for a channel that has since closed cannot hide an open one, and mppx validates any
+ * channel it resolves before reusing it.
+ *
+ * @example
+ * ```ts
+ * import { channels } from 'mppx/cloudflare'
+ * import { tempo } from 'mppx/server'
+ *
+ * tempo.session({ account, bootstrap: true, currency, getClient, ...channels(env.MPPX_CHANNELS) })
+ * ```
+ */
+export declare function channels(namespace: channels.Namespace, options?: channels.Options): channels.ReturnType;
+export declare namespace channels {
+    /** The Durable Object namespace binding of a {@link ChannelStore} class. */
+    type Namespace = Store.durableObject.Namespace;
+    /** Options of {@link channels}: those of {@link Store.durableObject}, and the escrow. */
+    type Options = Store.durableObject.Options & {
+        /** Escrow the lookup assumes when a challenge names none. @default the TIP20EscrowChannel precompile */
+        escrowContract?: Address | undefined;
+    };
+    /** What `tempo.session()` takes from {@link channels}. */
+    type ReturnType = {
+        /** Finds the payer's open channel for a challenge's payee, token, escrow and chain. */
+        resolveChannelId: ResolveSessionChannelId;
+        /** Channel store that schedules settlement and keeps the channel lookup current. */
+        store: Store.AtomicStore;
+    };
+}
+/**
+ * Settles the channels of a settlement queue batch on-chain, from the Worker's `queue()`
+ * handler. Each message is acknowledged once its channel settled or has nothing left to
+ * settle, and when settlement cannot succeed (the channel is gone or has no voucher); any
+ * other failure, such as a fee over the fee payer's cap, retries it after 30 s, doubling up
+ * to 10 minutes. The {@link ChannelStore} watchdog sends a channel again if its job never settles it.
+ *
+ * @example
+ * ```ts
+ * import { channels, settle } from 'mppx/cloudflare'
+ *
+ * export default {
+ *   async queue(batch, env) {
+ *     await settle(batch, { account, getClient, store: channels(env.MPPX_CHANNELS).store })
+ *   },
+ * }
+ * ```
+ */
+export declare function settle(batch: settle.Batch, parameters: settle.Parameters): Promise<void>;
+export declare namespace settle {
+    /** Parameters of {@link settle}: the channel store, a client, and the settlement transaction's options. */
+    type Parameters = SettlementTransactionOptions & {
+        /** Returns an account-bearing client for the channel's chain. */
+        getClient: (parameters: {
+            chainId: number;
+        }) => MaybePromise<TransactionClient>;
+        /** Settles one channel. @default mppx's `Session.Server.settle` */
+        settle?: typeof settleChannel | undefined;
+        /** The channel store, such as {@link channels}' `store`. */
+        store: Store.AtomicStore;
+    };
+    /** The subset of a Cloudflare `MessageBatch` that {@link settle} uses. */
+    type Batch = {
+        readonly messages: readonly Message[];
+    };
+    /** The subset of a Cloudflare queue `Message` that {@link settle} uses. */
+    type Message = {
+        readonly attempts: number;
+        readonly body: unknown;
+        ack(): void;
+        retry(options?: {
+            delaySeconds?: number;
+        }): void;
+    };
+}
+//# sourceMappingURL=Channels.d.ts.map

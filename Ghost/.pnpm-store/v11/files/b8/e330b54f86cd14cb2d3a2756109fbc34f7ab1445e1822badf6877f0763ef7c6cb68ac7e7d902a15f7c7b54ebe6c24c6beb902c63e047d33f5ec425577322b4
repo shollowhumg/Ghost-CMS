@@ -1,0 +1,5 @@
+/** Whether text is one line of plain text, as a name, a description or a title must be. */
+export declare function isPlainText(value: string): boolean;
+/** Returns the text with the characters `isPlainText` refuses removed. */
+export declare function toPlainText(value: string): string;
+//# sourceMappingURL=plain-text.d.ts.map

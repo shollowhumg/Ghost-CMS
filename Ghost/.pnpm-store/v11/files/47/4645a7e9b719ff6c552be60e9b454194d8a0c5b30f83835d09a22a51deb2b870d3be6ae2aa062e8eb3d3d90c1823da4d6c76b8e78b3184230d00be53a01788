@@ -1,0 +1,1408 @@
+# mppx
+
+## 0.17.4
+
+### Patch Changes
+
+- fa22d95: Fixed `ChannelStore` replacing the immediate send that a close request written during a failed queue send scheduled with the 60-second retry, and resending failed settlements forever when `minUnsettledAmount` is `0n` and the deposit is under 10 raw units: the threshold is now at least 1.
+- 3e44f83: Fixed `ChannelStore` giving up on a channel during the server's cooperative-close marker, which left a payer close request merged into it unsent, and spending watchdog attempts on alarms set for a close marker that a failed close then cleared. `ChannelStore` now rejects non-finite or negative `retryMs`, `staleAfterMs` and `watchdogMs` and a `maxAttempts` that is not a positive integer.
+- d11a756: Added `mppx/cloudflare`: a `ChannelStore` Durable Object that stores Tempo session channels and sends them to a settlement queue by amount or staleness, with a watchdog; `channels()`, the store and reusable-channel lookup for `tempo.session()`; and `settle()`, the queue consumer that settles them on-chain.
+- 48d97fa: Fixed `mppx/cloudflare` settlement and channel lookup: a payer close request stamped at or before the server's own cooperative-close marker is now sent to the settlement queue once that marker can no longer land, with an alarm at the marker's end; and a lookup add skips a channel that no longer resumes, while a full lookup entry drops closed channels before an open one.
+- b964dc4: Fixed `mppx/cloudflare` settlement and channel lookup: the server's own cooperative-close marker (recorded in the new `pendingCloseAt` channel field) no longer queues an immediate settlement, and `settle()` waits while that close may still land; a new payer close request after an earlier one cleared is sent at once; and each lookup entry keeps up to 8 of the payer's open channels, so closing one leaves the others findable.
+- 8e812d3: Fixed `mppx/cloudflare`'s `channels()` lookup returning a channel opened with another operator for a challenge without one, which mppx verifies against the zero operator, and losing a matching channel behind eight newer ones with other operators: lookup entries are now keyed by operator too (`mppx:session-lookup:v3`), so channels written before resume again after their next write. Fixed `ChannelStore` replacing the immediate send that a close request written during a queue send scheduled with a later watchdog alarm.
+- 7255375: Fixed `mppx/cloudflare` so `channels()` skips a channel opened with another operator than the challenge's, `settle()` renews its settlement lease while a settlement runs, and `ChannelStore` resends a closing channel within 2 minutes so every attempt fits in the escrow's close grace period.
+- 4adc283: Fixed follow-ups in `Store.durableObject` replay shards and `mppx/cloudflare`. Replay shards kept their claims in a table named `mppx_replay_claims`, so the shard alarm no longer clears a subclass's own `replay_claims` table. `ChannelStore` sent a channel to the settlement queue at once on a close request or a threshold's worth of new vouchers, instead of waiting for the watchdog after a failed job. `channels()` no longer let a delayed lookup write for a closed channel replace the entry of a channel the payer can still resume, and its lookup skipped entries whose channel had closed.
+- a9b2cbc: Added `onWrite` and `alarm` hooks to `Store.DurableObjectStore`: a subclass sees every applied write with its previous and next values in one storage transaction with the write (so the hook's own writes commit with it, and a hook that throws rolls it back), and can schedule and handle alarms through the protected `storage`, `state` and `env`.
+- 0968d3f: Renamed `Store.DurableObjectStore`'s store operations to `storeGet`, `storePut`, `storeDelete`, `storeSwap` and `storeClaim`, so Workers RPC reaches them on Workers whose Durable Object stubs keep the legacy `get`, `put` and `delete` methods, and `fetch` no longer calls a subclass's own methods of those names. `Store.DurableObjectStore.rpc()` now keeps a subclass's static members.
+
+  Fixed `DurableObjectStore.isReplayShard()` to match a replay shard's whole object name, so an ordinary key that starts with `mppx:replay:` is not taken for a shard, and the base `alarm()` clears claims only in an object that holds them.
+
+- 5ebce56: Added `DurableObjectStore.isReplayShard()`, so a subclass skips its own work (in `alarm`, handlers or its constructor, by the object's name) in the replay shards of `Store.durableObject`'s `replayShards`, which are objects of the same class, and documented that values stored at a key don't block its sharded replay claims.
+- 56e0c8c: Added `replayShards` and `replayShardVersion` options to `Store.durableObject`: replay claims spread over a fixed number of SQLite-backed shard objects, each claimed with one SQL statement and cleared by an alarm once expired, instead of one Durable Object per claimed key.
+- c776057: Added `transport: 'rpc'` and `encoding: 'native'` options to `Store.durableObject`: the store calls the object's methods over Workers RPC (with a class from `Store.DurableObjectStore.rpc(DurableObject)`), and native encoding stores structured-clone values, so bigints stay intact and values a Durable Object wrote with `storage.put` read back.
+- 2f96b5b: Improved the internal SSE parser's throughput on line-dense `text/event-stream` bodies by scanning with `indexOf` instead of a global RegExp.
+- 94d1e36: Fixed `Store.DurableObjectStore`'s native compare-and-swap treating a length-tracking view of a resizable `ArrayBuffer` as equal to a fixed-length one.
+- 5ba7bf5: Fixed `Store.durableObject` native compare-and-swap to compare object keys, map entries and set members in order, compare sparse arrays by their own elements instead of scanning to their length, and tell resizable `ArrayBuffer`s apart.
+- fa22d95: Changed `Store.DurableObjectStore`'s native encoding to reject views of resizable `ArrayBuffer`s, as it rejects other values it cannot compare, instead of probing their length tracking with a copy of the whole buffer resized to its maximum on every compare-and-swap.
+- 8e2f7fe: Fixed `tempo.charge` with `waitForConfirmation: false` to throw `Errors.BroadcastOutcomeUnknownError` with the transaction hash after an ambiguous broadcast failure, instead of the raw RPC error. `stripe.recordPayment` now returns the PaymentIntent's Stripe status as `paymentIntentStatus`.
+- ca6cc56: Fixed `Store.durableObject` storing a key named like a replay shard (`mppx:replay:v<version>:<shard>`) in that shard's object, where `DurableObjectStore.isReplayShard()` then reported it as a shard. Such keys, and keys starting with `mppx:key:`, now live in an object named `mppx:key:<key>`, so values stored at them before are no longer found.
+- d631e07: Fixed `Store.DurableObjectStore.rpc()` throwing when a subclass shadows a static member or method that an ancestor made non-configurable.
+- ed12b58: Added `Errors.BroadcastOutcomeUnknownError`, which `tempo.charge` now throws with the transaction hash and `validBefore` when an ambiguous broadcast leaves no receipt, instead of rethrowing the RPC error (still its `cause`). Added `stripe.recordPayment` to record a settled payment as a Stripe PaymentIntent, idempotent per transaction hash.
+- f54a1c9: Added `Errors.PaymentSimulationError`, which wraps a failed fee-sponsored preflight simulation with its `phase` (`sender` or `sponsored`), `sender`, `feePayer` and `paymentToken`, so callers can tell a payer's insufficient balance from a sponsor's. Fixed the sponsored simulation dropping a zero `maxPriorityFeePerGas`, which broke a hosted fee payer's signature.
+- a89d5f5: Added Zone payments to the `tempo` charge method. A server lists the Zones it accepts with `zones: [3, 7]`, or accepts any Zone with `zones: true`. A client pays from a Zone balance with `zone`: it withdraws to the recipient with a challenge-bound memo, waits for the withdrawal to settle on Tempo, and sends a `zone` credential with the settlement transaction hash, which the server verifies.
+
+  If the wait fails, the client throws `Errors.ZoneSettlementPendingError` and resumes the same withdrawal when the challenge is retried.
+
+- 3f60dcc: Fixed `mppx validate` and paid CLI retries rejecting every mppx server's retry Challenge as changed: the comparison now ignores the per-issuance `_mppx_nonce` and `_mppx_identity` in `opaque`. The malformed-Credential probe now sends the `-H` headers and puts the Credential in the header the server's Challenge names.
+- 64d852c: Fixed `mppx validate` error-handling hints to name the Credential header the server's Challenge uses instead of always `Authorization`.
+- 9ba2807: Fixed Zone ID validation to reject IDs that alias another Zone's portal address.
+
+## 0.17.3
+
+### Patch Changes
+
+- f8852c3: Removed the `eventsource-parser` dependency. The MCP client protocol now reads the first event of a `text/event-stream` response with a small internal SSE parser.
+
+## 0.17.2
+
+### Patch Changes
+
+- 247dc02: Rendered nested problem-details fields (such as `details`) as JSON in the CLI's Payment Rejected output instead of `[object Object]`.
+- d87c8bb: Removed `@stripe/stripe-js` from `dependencies`. The Stripe HTML payment page bundles Stripe.js at build time, and the Stripe Elements option types in `stripe.charge`'s `html.elements` are now inlined, so the published types no longer import `@stripe/stripe-js`.
+- a384733: Added `Store.durableObject()` and `Store.DurableObjectStore`, an atomic store backed by Cloudflare Durable Objects (one object per key, compare-and-swap with jittered retries), for running `tempo.session()` and replay protection on Cloudflare Workers.
+- adaeef7: Fixed Tempo and Stripe server bundles always including their HTML payment page: the page now loads with a dynamic `import()` the first time it is rendered, and `html.content` also accepts an async loader.
+- 2060c5f: Bound automatic session signatures and stored channel reuse to the authorized HTTP origin. Applied `trustedTempoProofRealms` to session challenges and forwarded manager pins. Added `session({ origin })` for direct credentials that will be reused over HTTP; originless stored channels must be explicitly migrated or closed rather than silently rebound. Use separate channel stores per HTTP origin because each payment scope retains a single channel.
+
+  Preserved request swap policies for automatic session top-ups and payment suppression through identity wrappers. Kept MCP adapter approval and payer selection authoritative when global payment fetch is installed. Limited proxy request bodies, including free routes, to 10 MiB by default with a configurable `maxRequestBodySize`.
+
+  Required explicit origin trust for remote snapshot recovery and rejected opaque origins. Preserved explicit CLI closing of legacy channels through validated origin migration. Returned payment challenges before buffering unpaid uploads and rejected oversized tee branches without waiting for sibling cancellation.
+
+- 55a7b62: Credited prepaid SSE items that failed before delivery when their spend remained unsettled. Added an idempotent merchant reconciliation hook for declined or uncertain credits, preserving settled funds and delivered-item charges.
+
+  Automatic prepaid credits are opt-in with `sse: { autoCreditPrepaid: true, onRefundRequired }`; existing merchant refund handlers remain unchanged. Delivery obligations persist in channel state before a managed stream starts, with bounded records and idempotent credit retries. Refund jobs distinguish uncertain writes from definite failures and expose only finalized captured funds as externally refundable. HTTP close receipts accept spend reduced by credits while retaining authorization and scope validation.
+
+- 7a18dac: Fixed sponsored preflight simulation billing the sender's fee token. Tempo nodes recover the fee payer of an `eth_call` only from `feePayerSignature` and ignore a bare `feePayer` address, so the final simulation charged the sender, and payments failed with "insufficient fee token balance" when the sponsor picked a fee token the sender did not hold. The simulation now carries the sponsor's signature: hosted sponsors return it from `eth_fillTransaction` (`fillHostedFeePayerTransaction` now returns `feePayerSignature`), and local fee-payer accounts sign a simulation-only copy with the new `signFeePayerSimulation`, only after the sender simulation passes. The sender simulation now runs at the transaction's exact gas limit with zero fee fields and the fields that set its intrinsic gas, so a transaction whose gas is too low is rejected before broadcast without needing a sender fee balance. The local simulation-only copy adds up to `sponsoredSimulationGasBuffer` (10,000) gas, because a sponsored `eth_call` charges more gas than the mined transaction uses, clamped to the fee payer policy's `maxGas` and `maxTotalFee` (`sponsoredSimulationGas`). When the sponsored simulation runs without the full buffer (hosted signatures, or clamped padding), a failure that is only out of gas no longer rejects the payment; fee balance errors and reverts still do.
+- a4d7a8e: Added `Store.sql()`, an atomic store on SQL databases (single-statement compare-and-swap, no transactions needed, and replay claims in one statement), with `Store.postgres()` for `pg`, Neon, Vercel Postgres, Supabase and PGlite, `Store.sqlite()` for `node:sqlite`, `better-sqlite3` and `bun:sqlite`, and `Store.d1()` for Cloudflare D1.
+- 8be5d55: Fixed esbuild bundles including all of `zod/mini` by importing it as a namespace in `mppx`'s zod helpers, so unused validators tree-shake.
+
+## 0.17.1
+
+### Patch Changes
+
+- 95dd056: Fixed closing a Tempo session paid with a Viem Tempo access key account. `signCloseAuthorization` now signs the close authorization hash raw with the access key, as vouchers already do, instead of returning a keychain signature that TIP-1034 rejects.
+- ed76e8e: Accepted the RFC 9530 byte-sequence form (`sha-256=:base64:`) in `BodyDigest.verify`, alongside the existing bare form. `BodyDigest.compute` still emits the bare form.
+- 20eca32: Added `feeToken` to the Tempo charge client, so an access key whose spending limits exclude the default fee token can pay an unsponsored charge's fee in a token it may spend.
+- 2b747bf: Fixed Tempo charge settlement returning a fresh 402 after a paid transaction was mined: a broadcast rejected with `ExpiringNonceReplay` (for example, a retried send) now recovers the transaction's receipt instead of failing.
+- cd6a2a7: Fixed payment retries losing Request-carried HTTP methods and bodies, including valid body overrides. Rejected automatic payment after redirects with ambiguous method rewriting before creating credentials.
+- 807376f: Fixed cooperative HTTP session close inheriting the resource Request's body and abort signal while preserving its transport settings and the same resource URL.
+- 2ca12d1: Charged request-priced SSE-enabled content before invoking application handlers, including POST requests that return plain responses. Marked the receipt prepaid to avoid charging the first stream unit twice. Per-item pricing remained stream-driven. Applications must refund request charges when they cannot serve the accepted request.
+- 3fca0d6: Added an opt-in `replay` option to `Proxy.create`, so a payer who loses the connection during a long paid request can collect the response. The paid upstream request runs detached from the client, and a retry with the same credential and request gets the stored response, `202` while it runs, or a new upstream attempt after a failed delivery, without paying again.
+- afb9924: Fixed rejected WebSocket payments leaving sockets open when detailed error messages exceeded the close-frame reason limit.
+- 3c2bc84: Bound each session manager to its first HTTP origin and persisted that binding with reusable channels. Rejected cross-origin HTTP, SSE, and WebSocket reuse before disclosing channel hints or payment credentials, and prevented redirects from forwarding session requests. Existing unbound channel entries acquired an origin on their next validated reuse.
+- 9957b10: Applied the `currencies`, `maxAmount`, `maxAtomicAmount` and `expectedRecipients` client options to Tempo session payments. `tempo()` passed them only to its charge method; its session method, and `tempo.session()` given them directly, now skip offers in other currencies, to other recipients or above the cap during selection and reject them before signing or topping up a channel. An explicit close passed to `Mppx.createCredential`, `fetch` or the MCP client stays available for any offer: `canHandleChallenge` now receives the caller's credential context when it is known before selection.
+- 5d353bb: Prevented validation probes from authorizing payments through an installed global Mppx fetch wrapper.
+
+## 0.17.0
+
+### Minor Changes
+
+- 25c8468: Simplified payment-stage identity. Breaking changes to `mppx/identity`:
+
+  - Every payment offer in one 402 now carries the same HMAC-bound identity nonce, passed to verifiers as `context.nonce`. Bind payment-stage proofs to it instead of the challenge id. Routes may combine several offers with payment-stage identity (for example `tempo()`'s default currencies, or Tempo and Stripe), as long as they require the same verifiers; previously a route allowed only one such offer.
+  - Verifiers issue their 402 challenge headers through a new optional `challenge(request, { nonce })` hook, which runs once per 402, instead of returning them from `verify` as `missing`. `verify` only checks proofs.
+  - `Prover.retry` is split: `prepare(response, { challenge })` runs on a 402 before the payment retry, and `retry(response)` runs on other rejections and returns whether to resend.
+
+### Patch Changes
+
+- b149237: Raised the @hono/node-server override to 2.1.5 to resolve a dependency audit advisory.
+- faa4735: Fixed the client throwing `No Payment schemes found.` on a `402` whose `WWW-Authenticate` has no Payment challenge, so other protocols such as x402 now handle it.
+- 73b464f: Fixed the Tempo charge client signing a sponsored transaction whose `validBefore` had fewer than 15 seconds left after slow preparation: the pre-sign check now measures `validBefore` as well as the challenge expiry.
+- a0d54fd: Enforced the fee payer's 15-second remaining-validity minimum for Tempo charges: clients refused to sign a sponsored pull transaction for a challenge expiring in under 15 seconds, checking again right before signing, and servers refused to issue a sponsored challenge with a paid amount and pull mode that expires that soon. Push and zero-amount challenges were exempt. Request hooks received the expiry echoed by the credential when verifying it.
+- 7a68c55: Fixed focused tests failing in a clean checkout by generating the HTML modules on demand, and the package check's cleanup reinstalling dependencies with the publish manifest.
+- 443ad6d: Improved `mppx validate` SSE receipt scanning to search only newly received text for event boundaries, so long events no longer cost quadratic time.
+
+## 0.16.0
+
+### Minor Changes
+
+- 793aa2b: Replaced request attestation with per-route identity. Breaking changes:
+
+  - `mppx/attestation` became `mppx/identity`. Server `Mppx.create({ attestation })` was removed (passing it now throws); routes take `identity: [verifier, ...]` (all required), for example `mppx.charge({ amount, identity: [tap] })`, and the result exposes `result.identity.get(verifier)`.
+  - Added `Identity.anyOf(...)` to accept one of several protocols. Every member runs, so each presented proof is consumed.
+  - Verifiers return `missing`, `invalid` or `valid` (`unverified` became `invalid` with code 403), may set their own status `code` and `headers`, and declare a `stage`: `request` (checked before any 402) or `payment` (adds headers to the 402 and is checked against the answered challenge and credential before settlement). Identity rejections are returned on the non-200 branch as a 401/403 response.
+  - A composed route can include at most one offer with payment-stage identity. Payment-stage identity is not supported on methods with a preflight hook.
+  - Client `attestation` signer maps became `identity: [prover, ...]`. Provers have a required origin `scope`, receive the payment challenge in `prove(request, context)`, and can prepare proofs or request one resend with `retry(response, context)`. Requests that carry proofs do not follow redirects.
+  - TAP and Web Bot Auth moved to `mppx/extensions/identity/tap` and `mppx/extensions/identity/web-bot-auth`; `Client.signer` became `Client.prover`.
+
+### Patch Changes
+
+- e555544: Fixed client payment events masking original errors when a response body had already been consumed or locked.
+- 81a95e1: Fixed multi-method intent handlers rejecting every route option but `identity` when the methods' options can't be inferred, such as `mppx.charge({ amount })` with `stripe.create(...).defaultMethods()`.
+- c31d932: Added optional `summary` and `requestBody` to proxy endpoint definitions, emitted in the proxy's generated `/openapi.json`. Free routes can carry them as `{ free: true, summary, requestBody }`. An endpoint that is neither a payment handler, `true` nor `{ free: true }` (such as `{ pay: undefined }`) now fails closed with an error instead of being proxied.
+- dd2c3e3: Refused to sign a zero-amount Tempo proof when the Challenge realm differs from the hostname of the server that sent it, so another origin can't relay a Challenge and replay the proof at its realm. To allow a server whose realm isn't its hostname, pin the realm to its origin with `trustedTempoProofRealms` on `Mppx.create` and `Fetch.from`, such as `{ 'https://api.example.com': 'MPP Payment' }`. Without an origin (`McpClient.wrap`, or `Mppx.create` with `Transport.mcp()`), these proofs are refused unless `trustedTempoProofRealms` lists the realm. The `mppx` CLI and `sessionManager` bootstrap apply the same check, and `sessionManager` takes `trustedTempoProofRealms` too. This matches mpp-rs, mpp-go and pympp.
+- d78de2c: Fixed missing subscription access-key address indexes when reusing existing keys.
+- 909f3db: Fixed Tempo session top-up, voucher retry, close and bootstrap requests to send the credential in the header the challenge selects (such as `Payment-Authorization` with `requiresAuth`) instead of always using `Authorization`. These requests keep the paid request's own `Authorization` header and no longer follow redirects, so the credential can't reach another origin.
+- 464df9a: Fixed Tempo charge verification rejecting split amounts written with leading zeros by comparing them as integers.
+- 9008513: Removed the `allowKeyAuthorization` fee-payer policy: sponsored transactions may now carry a `keyAuthorization`, so an access key can open a fee-sponsored session (or pay a sponsored charge) in the transaction that installs it. Sponsor exposure stays bounded by `maxGas` and `maxTotalFee`.
+- 4cfd556: Fixed `mppx validate` failing Tempo session responses that stream over SSE: when the receipt arrives in the event stream instead of the `Payment-Receipt` header, validation checks the `payment-receipt` event in the stream instead of requiring the header, and fails when the stream has none.
+- 510d1ed: Fixed `mppx validate` failing valid SSE sessions: the in-stream `payment-receipt` event is now read from the server's own stream, which the session client strips, and lone-CR line endings are accepted.
+- e6d8ffc: Fixed `mppx validate` buffering SSE session streams in memory and hanging when the session client cancelled one: in-stream receipts are now read as the client consumes the stream instead of from an unread copy.
+- 464df9a: Raised the zod dependency to ^4.6.7 to pick up the fix for GHSA-mrhx-c7xc-m3w5.
+
+## 0.15.0
+
+### Minor Changes
+
+- 4f8790f: Fixed implicit TLS bypass for local hostnames, discarded Express payment responses, expiry-crossing replay claims, standalone realm validation, and WebSocket metering from stale challenge prices. Bounded anonymous subscription challenge keys and retained billing keys only after successful payment submission.
+
+  Standalone credential APIs now require a configured matching realm or trusted route context. Custom WebSocket routes must return the canonical challenge or set an explicit `amount`. The CLI no longer pays when `--insecure` is enabled. Anonymous subscription setup carries an authenticated encrypted key token in the challenge, using one persistent sealing key instead of per-request pending state. Challenge expiry remains enforced before activation. Previously persisted abandoned keys are not automatically removed.
+
+  Preserved successful charge receipts when a challenge expired during settlement, preventing a fresh payment challenge after funds moved.
+
+  Preserved Express JSON replacers, spacing, and escaping before payment response wrapping. Preserved HTTPS hostnames for certificate validation; local HTTPS names use the system resolver, while plain HTTP localhost subdomains retain the loopback shortcut.
+
+  Selected the key bound to a new subscription challenge before a previously retained billing key, allowing an expired subscription to be activated again for the same payer.
+
+## 0.14.1
+
+### Patch Changes
+
+- 908af47: `superviseCloses` accepts a `settlementSchedule`, in raw token units, and settles open channels whose spend crossed it, within spend, reporting them `settled`. Servers that charge with `charge()` rather than through the session handler, whose schedule runs only on its own charges, now collect spend without waiting for a close. `resolveSettlementSchedule` and `ResolvedSettlementSchedule` are exported.
+
+## 0.14.0
+
+### Minor Changes
+
+- 00d3894: Added session accounting primitives to the Tempo session server, so payment servers no longer edit channel records themselves.
+
+  - `Session.Server.charge()` (also `tempo.session.charge()`) accepted an `idempotencyKey`: a retry with the same key and amount returned the recorded charge without charging again, and the same key with another amount threw `IdempotencyKeyConflictError`. It also accepted a `Store` as well as a channel store.
+  - Added `Session.Server.credit()` (also `tempo.session.credit()`), which returned an amount to a channel's `spent` at most once per key. Its first outcome was final: `credited`, `declined` when the channel was closing or finalized or the credit would take `spent` below zero or below what settled or may still settle on-chain, or `unknown` when the store write failed and may have committed.
+  - Keyed charge and credit outcomes were recorded on the channel record for `retention` (24 hours by default) and removed by the channel's next keyed charge or credit, so they worked with every channel store.
+  - `settle()` and the settlement schedule settled the largest accepted voucher at or below `spent` (`Session.Server.resolveSettleableVoucher()`) instead of the highest voucher, which a credit can leave above `spent`; channels kept up to 16 earlier vouchers for this. A settlement held a credit floor at its amount until its transaction could no longer land. **Breaking:** `settle()` no longer captured a voucher above `spent`, and threw "nothing to settle" when no accepted voucher was within `spent`.
+  - Added `tempo.superviseCloses()` (also `Session.Server.superviseCloses()`) for a scheduled job: it read the escrow state of the given channels at one pinned block, answered payer close requests with a payee close capturing `max(spent, settled)` with configurable fee payment, finalized channels whose deposit left the escrow from their `ChannelClosed` event, and reopened channels whose close request was cancelled. It returned the pinned block and its timestamp with per-channel outcomes and counts.
+  - Added `sponsorshipLimit` to `tempo.session()`, which limited fee-payer-sponsored opens, and separately top-ups, to five per verified transaction signer per UTC day, counted in a `Store.AtomicStore`.
+  - `Chain.getChannelStatesBatch()` accepted a block number.
+
+## 0.13.6
+
+### Patch Changes
+
+- 82810df: Added `autoSwap.fallback` to Tempo charges. Setting `fallback: false` swaps only from `tokenIn`, as an allowlist, instead of also trying pathUSD and USDC afterwards.
+- 82810df: Added OUSD to the default Tempo auto-swap currencies, after pathUSD and USDC.
+- 0acc2bc: Fixed Tempo charge auto-swap finding no route for an access key whose authorization was not yet published. Balance and DEX quote reads no longer carry the client's account, which the node rejected with `KeyNotFound`.
+- 7827823: Bounded session management POSTs to 30 seconds so stalled endpoints cannot hold funding waiters indefinitely. Timed-out payments report an unknown outcome and ignore late responses.
+
+  Persisted uncertain top-up state in the channel store after dispatched management requests timed out, failed, or were cancelled and blocked new deposits, including from replacement managers. Callers must reconcile the pending transaction against trusted chain state before clearing that state.
+
+- 4de6876: Bounded payment authorization values to 64 KiB before scheme extraction and decoding.
+- 80f9a76: Rechecked sponsored subscription and session transaction deadlines before signing and submission. Aligned validity-window rounding and rejected maximum windows below the required 15 seconds.
+- 051510d: Fixed `compose()` dispatch for handlers without a static `scope`. Their challenges are scoped to the request's route, so dispatch now compares the credential's metadata with that scope merged in, instead of falling back to the first handler with the same method and intent.
+- 626afc6: Fixed `compose()` dispatching every `tempo/session` credential to the first session handler. Dispatch compared the credential with each handler's route request, which lacks the `chainId` and `sessionProtocol` the session request hook adds, so no handler matched; sessions offered in several currencies rejected all but the first with a currency mismatch.
+- f82decc: Sessions now read on-chain channel state concurrently with the stored channel when accepting a voucher, instead of after it. The forced on-chain refresh and error precedence are unchanged.
+- 7055666: Fixed manual streaming charges to commit before stream.charge() resolved, retaining charges when subsequent work was canceled or failed.
+- 3f95f89: Fixed the EVM CLI plugin to use the selected account when signing payments.
+- 3b18cd0: Paid session requests make fewer store round trips. Validating a voucher credential right before broadcasting it no longer reads the stored channel, since broadcasting checks it again. With `voucherStateMaxAge`, a voucher is checked against the stored channel inside the store update that accepts it, without a separate read. The new `chargeOnAcceptance` option charges request-priced content in that same update instead of a second update when the response is delivered.
+- 97eb961: Added `reusableChallenges` to `tempo.session()`. A session challenge then stays valid for later requests to the same route until it expires: it is bound to its route, currency, recipient and channel terms but not to the amount it quoted, and every request is charged its own price from the channel's accepted balance. Clients can send a voucher with a request instead of waiting for a `402`. Composed handlers with a stable binding are now also dispatched by the fields their route request defines, and with reusable challenges session SSE responses charge the verified route request's amount.
+- 22e5b42: Limited automatic swaps to the missing balance and bounded spending independently of DEX quotes. Added an explicit maxAmountIn budget for non-parity token pairs; defaults assumed 1:1 token units plus slippage. Sponsored charge validation accepted partial acquisition up to the payment amount.
+- 132a793: Stopped reusing cached relay receipts as new payment authorizations. Relay broadcasts now omit idempotency keys so reused credentials are rejected; applications should recover uncertain outcomes separately from executing protected operations.
+- 78d0a04: Serialized session-manager top-ups and refreshed the active deposit before subsequent funding decisions, preventing concurrent automatic requests from exceeding the configured deposit limit.
+- 9ad515a: Fixed Stripe-backed session offers to enforce the one-cent recording minimum before application offer policies.
+- d4dddfc: Checked on-chain escrow during managed SSE and WebSocket streams and stopped delivery when escrow closed or checks failed.
+- 13a9035: Added `voucherStateMaxAge` to `tempo.session()`. Vouchers within the deposit of on-chain state verified that recently are accepted without waiting for a fresh on-chain read, which finishes in the background and records a pending close for later vouchers. The verification time is persisted on the stored channel so every server instance can use it. The default `0` keeps reading on-chain state before every acceptance.
+
+## 0.13.5
+
+### Patch Changes
+
+- 19315c7: Bounded automatic MCP JSON and SSE payment-challenge inspection to 1 MiB while preserving the original response stream for callers.
+- 9da0e18: Removed retained native response bodies from manual payment event snapshots to prevent unbounded buffering while callers consume streams. Status and headers remained available; non-HTTP transport snapshots were unchanged.
+- 68381a4: Fixed Tempo charge `validBefore` to cover a fractional challenge expiry, so charge transactions stay valid for as long as their challenge.
+- ca6f04b: Exported `Attribution` from `mppx/tempo` so apps can encode, decode, and verify MPP attribution memos on TIP-20 transfers.
+- b085cae: Exposed the verified payer as `payer` on payment success contexts and per-method `onPaymentSuccess` hooks. Tempo charge and EVM charge validation now report the recovered payer address as `payer`.
+- 47beb31: Attached the original error as `cause` on `InternalPaymentError` so payment hooks can inspect unexpected failures, and added `CredentialReplayedError` (a `VerificationFailedError` subclass) for Tempo charge credentials whose payment already settled: replayed transaction hashes and proofs, claims held by a concurrent request, and settled transfers whose memo is bound to another challenge. The HTTP transport and session bootstrap answer it with a final 403 Problem Details response without a `WWW-Authenticate` challenge, so clients do not pay again; the problem type stays `verification-failed`.
+- 7271a85: Recovered confirmed Tempo charges when a synchronous broadcast returned an RPC error after inclusion.
+- 08fa745: Released Tempo charge transaction hash claims when settlement fails after a broadcast attempt, so retrying the same credential re-broadcasts and recovers the receipt instead of being rejected as a replay.
+- 1e692c3: Added `Errors.PaymentOutcomeUnknownError` and emitted it through `payment.failed` when a paid retry returns a 5xx response, carrying the challenge, credential, and the transaction hash for push and unsponsored Tempo charges. The response is still returned and never retried; when `payment.failed` is observed, its body is first buffered up to 64 KiB within 2 seconds so the connection is released, and a cut-off body is marked with `Mppx-Body-Truncated: true`. A thrown paid retry now passes the same error to `payment.failed` with the original error as `cause`, and the original error is still thrown.
+- 74533b0: Required at least 15 seconds of remaining validity before sponsoring and broadcasting transactions.
+- 94162a5: Fixed session settlements failing the charged request when a lagging RPC replica reverted the settle while preparing it (such as `ChannelNotFound` right after an open); `settle()` now retries reverted preparations.
+- 763a187: Shared default sponsor-budget storage across currency offers from tempo.charge and tempo.common, enforcing aggregate exposure limits without changing replay-store policy. Multi-process deployments still require a shared atomic store.
+- 68381a4: Shared one in-flight signing between concurrent Tempo charge requests for the same challenge and signer.
+- 61b4c10: Added `maxAmount` (display units, parsed with `decimals`) and `maxAtomicAmount` (base units) to the `tempo.charge()` client, matching the EVM charge client, plus a `currencies` allowlist that the caps require. Offers that exceed a cap or fail `currencies`, `expectedRecipients`, `expectedChainId`, or `allowedChainIds` are skipped during challenge selection and rejected before signing, and a `maxAmount` that would round is rejected.
+- 29855e8: Bounded synchronous Tempo charge broadcasts by a configurable `confirmationTimeoutMs` deadline (default 30 seconds). The broadcast may use at most two thirds of it, which leaves time for recovery. When the broadcast outcome is unknown, such as a timeout, a lost connection, or an "already known" response, the receipt is now polled until the deadline instead of failing while the transaction is still pending. Polling stops early once an expiring transaction is past its `validBefore`, followed by one final receipt lookup. Definitive RPC rejections still fail immediately.
+- 27213df: Added a one-time warning when Tempo `charge`, `session`, or `subscription` server methods fall back to an in-memory store, since replay protection backed by it only applies within a single instance.
+
+## 0.13.4
+
+### Patch Changes
+
+- a732d24: Fixed `tempo/session` settlement failing after confirmation when a lagging RPC replica served the readback; `settle` read channel state at the receipt's block. Confirmed checkpoint failures were also reported.
+- d27f02d: Fixed `tempo/session` `onSessionSettlement` double-counting a retried settlement after a failed checkpoint; `delta` now comes from the receipt's `deltaPaid`. Exported `SettlementCheckpointError` as `tempo.SettlementCheckpointError` from `mppx/server`.
+- a732d24: Changed `tempo/session` to serve charged requests when a scheduled settlement's lease claim, JSON-RPC rate limit, internal RPC error or receipt wait failed transiently; the next settlement collected the charge.
+- bbbec69: Added a fresh HMAC-bound issuance nonce to server-generated payment challenges while preserving route metadata checks.
+- 53c394a: Prevented CLI validation probes from following redirects.
+- 99b6e08: Prevented WebSocket payment authorization after cancellation and settled interrupted connection attempts.
+
+## 0.13.3
+
+### Patch Changes
+
+- 06dc781: Fixed `tempo/session` reopening a channel when a broadcast close failed ambiguously. The pending-close marker stayed until the close transaction expired, and a later voucher or close cleared it once the chain showed the channel still open.
+- 55c3c26: Changed `tempo/session` to serve a charged request when its scheduled settlement hit a transport or RPC failure; the next settlement collected the charge. Reverts and configuration errors still failed the request.
+- c22cf1a: Fixed `tempo/session` failing a charged request when its settlement confirmed but the channel store could not record it. `settle` raised `SettlementCheckpointError` with the transaction hash instead.
+- 6921631: Fixed scheduled `tempo/session` settlement marking charges accepted while the settlement transaction was pending as settled. `settle` recorded the spend and units read with the submitted voucher instead.
+- 55c3c26: Added `onSessionSettlementFailure` to `tempo.session()`, called with the chain, channel, error and trigger (`scheduled` or `close`) when a scheduled settlement or close transaction fails.
+
+## 0.13.2
+
+### Patch Changes
+
+- ac542e3: Enforced offer eligibility before settling native transport credentials.
+- 3b08fc4: Fixed `tempo/charge` releasing another request's replay marker when a transaction's final hash collided with an already-claimed hash, which let a settled transaction pass replay protection again.
+- 9856cd2: Disabled automatic redirects on credential-bearing fetch retries to prevent payment credential disclosure.
+- 5c81137: Used verified token decimals when enforcing persistent CLI session deposit limits.
+
+## 0.13.1
+
+### Patch Changes
+
+- ec6c6cf: Added paired Elysia lifecycle hooks that wrapped actual route responses for streaming metering. Rejected streaming payments registered with only a beforeHandle hook and required Elysia 1.2.0 or newer.
+- 86dddc8: Stopped emitting payment-success events when authorization reused existing access without verifying a new credential.
+- e60b7ea: Settled previously accepted vouchers when terminal voucher processing detected a pending channel close, using the existing shared scheduled-settlement claim. Kept standalone validation free of settlement side effects.
+- cfb4bff: Reserved stream charges atomically in shared channel state and released or expired unused reservations.
+
+## 0.13.0
+
+### Minor Changes
+
+- e6f903f: Required shared replay storage for Stripe Tempo payment methods.
+- 44b9115: Removed the deprecated legacy session client exports.
+
+### Patch Changes
+
+- e73cd68: Fixed Node server responses so streams stopped when clients disconnected.
+- eb888ab: Fixed server request handling so bodies were bounded and backpressured.
+- 22c0633: Fixed proxy requests so payment authorization was not forwarded upstream.
+- beceee5: Fixed proxy responses so payment-specific headers were stripped.
+- 47e2faf: Fixed Stripe proxy requests so caller routing headers were removed.
+- e2bfcf3: Fixed CLI discovery so untrusted origins were rejected.
+- b224b23: Fixed EVM nonce hashing so input fields were framed unambiguously.
+- 4bdad2b: Fixed Tempo SSE parsing so standard line endings were accepted.
+- e66245d: Fixed MCP payments so the selected payment method was used.
+- 8c42db6: Fixed Tempo transaction credentials so proofs were bound to their source account.
+- 23499aa: Fixed composed server methods so credential headers remained scoped to their transports.
+- 3fc6dd4: Fixed x402 verification so route-bound credentials were required by default.
+- 7e6a86a: Fixed CLI credential retries so requests remained pinned to the challenge origin.
+- 7c91998: Fixed CLI challenge handling so mismatched payment realms were rejected.
+- 8bfe2d1: Fixed middleware payment challenges so credentials were bound to routes.
+- 8bfeb03: Fixed manual session streams so terminal charges were committed.
+- 52b88c6: Fixed session charging so the final retry result was validated.
+- adc5c07: Fixed Tempo sessions so expected chain pins were applied.
+- f9c56d8: Fixed Tempo payment proofs so signer accounts were resolved correctly.
+- ad11f54: Fixed subscriptions so pending renewal credentials were rejected.
+- f14f1ee: Fixed CLI token approvals so configured decimals were verified.
+- c301267: Fixed session channel waits so timed-out callers were cancelled.
+- 91eed32: Fixed session WebSocket input so oversized frames were rejected.
+- f823c86: Fixed session management requests so nested operations honored cancellation.
+- 6568964: Fixed session SSE streams so values were pulled with backpressure.
+- d40dfbd: Fixed session WebSocket output so buffered data remained bounded.
+- e77e9c3: Fixed hosted session sponsorship so configured policy was enforced.
+- 9076794: Fixed sponsored access keys so installation required explicit opt-in.
+- dcee2e8: Fixed sponsored subscriptions so fee tokens were restricted to configured tokens.
+- a7eb66a: Fixed x402 compatibility offers so their payment lifecycle remained safe.
+- 25952d3: Fixed cooperative session closes so close credentials were authorized.
+- 909ccc1: Fixed sponsored session calls so supported call payloads were canonicalized.
+- f431415: Fixed session voucher acceptance so channel state was refreshed before validation.
+- 2afa94d: Fixed scheduled session settlements so concurrent workers claimed each settlement atomically.
+- bd96362: Fixed bodyless session responses so payment accounting completed before protected handlers continued.
+- c7968ca: Added optional funding currency metadata to Tempo charge receipts for verified direct, MACH, and DEX auto-swap payment routes.
+
+## 0.12.0
+
+### Minor Changes
+
+- e4f0e02: Added ordered `currencies` configuration to the Tempo and EVM server factories, with OUSD followed by USDC.e on Tempo mainnet and OUSD followed by pathUSD on Moderato. Added chain-aware viem token-set support and deprecated the factories' singular `currency` option. Explicit currency configuration continued to restrict acceptance to that currency.
+
+  Changed `tempo.charge()`, `tempo.session()`, and `tempo.subscription()` to return ordered method groups. Existing `methods: [tempo.charge(options)]` configuration remained supported. Code inspecting a single method directly must now destructure the returned group; explicit composition should use configured handlers such as `mppx.tempo.charge`. Wire Challenges and per-handler currency overrides remained singular.
+
+  Preserved offer selection, callbacks, and error responses through nested composition. Preserved proof replay policy without a configured store and honored explicit charge chain IDs. Shared session storage and settlement dispatch across accepted currencies, applied settlement thresholds using each channel's currency, and initialized session extensions without mutating previously created methods. Preserved each existing subscription's authorized currency during reuse and renewal, and defaulted new subscription offers to mainnet, with `testnet: true` selecting Moderato.
+
+  Reduced package size by removing duplicated HTML bundle literals from generated type declarations.
+
+  Pinned workspace viem dependencies to the public `2.57.1` release and required `viem >=2.57.1` as a peer dependency.
+
+### Patch Changes
+
+- 1d08567: Added AI agent attribution to the CLI User-Agent header when a recognized environment signal is present.
+- 869885e: Added `allowedFeeTokens` for sponsored Tempo charges. Preserved local token defaults and allowed hosted sponsors to choose their fee token unless explicitly restricted.
+- 3a23894: Fixed implicit and explicit composition to preserve each configured method's identity, currency defaults, and offer order. Resolved standalone credentials against configured request bindings, rejected ambiguous method matches, and limited per-method payment success hooks to the selected method.
+- dcf1589: Fixed CLI agent attribution test isolation across agent environments.
+- 75cb219: Fixed hosted fee sponsorship for credential-triggered Tempo session settlement and close.
+- fe2e66e: Fixed split-charge verification to reject payment transfers with attribution memos bound to conflicting challenges or realms.
+- 8d2fb06: Fixed Tempo session content requests to require a voucher advance before charging, preventing an accepted cumulative voucher from authorizing multiple responses while preserving idempotent management updates.
+- 8829293: Allowed `hostedFeePayer: true` in Stripe test mode by applying hosted fee sponsorship only in live mode.
+- 8405b23: Fixed Stripe sandbox sessions to use Tempo testnet.
+- 7159693: Fixed testnet validation of streaming Tempo sessions.
+- 420b99b: Added automatic testnet faucet funding for session operators in `mppx validate`.
+
+## 0.11.0
+
+### Minor Changes
+
+- 1851f0f: Removed custom Tempo charge memos and required challenge-bound attribution memos during direct verification. Remove `memo` from charge options; clients generate attribution memos automatically. Split transfer memos remain supported.
+
+### Patch Changes
+
+- ba6f7a2: Added opt-in MACH funding through global Tempo `machineTokenEnabled` configuration, currently applied to charges using canonical swapper routes and supported stablecoin fee tokens.
+- 4dc37a8: Removed the x402 client requirement that resource URLs match response URLs.
+- 83cef8f: Fixed Stripe crypto PaymentIntent amounts rounding up and failing transaction verification for fractional-cent payments.
+- a0a7d5b: Added automatic Stripe PaymentIntent recording for Tempo session settlements, using each transaction's newly settled amount rounded down to whole cents and recording the session intent in analytics metadata. Preserved optional settlement callbacks after recording; applications no longer need to create PaymentIntents in those callbacks.
+
+## 0.10.1
+
+### Patch Changes
+
+- 232712e: Allowed `prepareRequest` to return responses that do not require payment by default and added a strict `requirePayment` option.
+
+## 0.10.0
+
+### Minor Changes
+
+- c0ce0fe: Enforced recipient allowlists for both primary and split recipients, including zero-amount proofs.
+
+  Migration: include the primary recipient address as well as every split recipient in `expectedRecipients`. Configurations containing only split recipients are now rejected.
+
+### Patch Changes
+
+- 3c14a65: Enforced charge and session chain policies and rejected clients on conflicting payment chains. Preserved configured payment methods, challenge preferences, session retries, incremental SSE output, and follow-up vouchers in the CLI. Updated validation to use configured methods and advertised payment metadata, avoid unrelated wallet preflights, and settle session attempts after responses or transport failures.
+- eda059a: Added a non-blocking `suggested` validation category and used it for missing, empty, or non-text `/llms.txt` documentation.
+- d71ad79: Added request-aware payment preparation with safe redirect handling and pinned credential delivery.
+
+## 0.9.3
+
+### Patch Changes
+
+- 43ec92c: Bound subscription key authorizations to their server-issued payment challenge.
+- 175d709: Allowed EVM and x402 payments to be prepared without an account and signed using an account supplied during credential creation.
+- 5932b08: Added non-mutating EVM credential validation with facilitator checks and revalidation before settlement through the existing broadcast lifecycle.
+- 1fd8746: Expanded Tempo session close rollback and expiring-nonce transaction coverage.
+- 459b517: Added challenge context to payment-success hooks, standardized Stripe PaymentIntent analytics
+  metadata, and added a shared SDK version identifier.
+- 203bad2: Added typed multi-offer composition for MCP SDK and JSON-RPC transports while preserving selected-payment dispatch and receipt metadata.
+- a5451d0: Updated `fast-uri` and `qs` to patched versions, resolving their latest security advisories.
+- a802ce9: Added method-agnostic CLI payment extensions that can enforce policy or prepare funds before credential creation.
+- baa0fd5: Added a fee-payer policy option to reject sponsored key authorizations while allowing them by default.
+- f494ffd: Added request-scoped PaymentIntent option resolvers that run before terminal Stripe payments.
+- 7949db6: Fixed server-side session transactions to use expiring nonces across independent processes.
+- 26f9840: Removed the Stripe SPT runtime dependency on viem.
+
+## 0.9.2
+
+### Patch Changes
+
+- 14e8b25: Added CLI support for selecting and paying x402 payment challenges.
+- 5cbc5e4: Added request-scoped PaymentIntent customer, receipt email, and Tax calculation options, with fallback recording without rejected optional fields for completed crypto payments.
+- b12e65b: Fixed framework adapters to preserve multi-method intent challenges.
+- f13f800: Added a machine-payment metadata field to every Stripe PaymentIntent created by mppx.
+- 9dd9969: Added opt-in Stripe-hosted Tempo fee sponsorship to `stripe.create()` using the configured Stripe client.
+
+## 0.9.1
+
+### Patch Changes
+
+- a33ff0a: Added MACH as a charge currency with stablecoin gas fallback and preserved session recovery.
+- c74d2ce: Added request-scoped PaymentIntent metadata to Stripe machine payment charge handlers, and exposed pre-transform request input to payment-success callbacks.
+- 2735c65: Fixed MCP payment errors to use the specification-defined JSON-RPC codes and retry verification challenges.
+
+## 0.9.0
+
+### Minor Changes
+
+- c23eaf0: Removed machineUSD charge and session flows, requiring servers that advertise machineUSD to remove that configuration before upgrading.
+
+### Patch Changes
+
+- 9582c40: Routed hosted Tempo fee-payer fills through the configured `withFeePayer` transport and broadcast completed transactions through the default RPC transport.
+- d343aae: Added `preparePayment` for inspecting a selected client payment before creating and attaching its credential.
+- 7ce3160: Added the V8 coverage provider required by the configured test coverage command.
+- 5e10359: Fixed concurrent HTML builds sharing a temporary directory.
+- 4e4810a: Added a `requiresAuth` server option that used `Payment-Authorization` for Payment credentials.
+- 1a36a5e: Added HTTP headers to remote Tempo fee-payer configuration.
+- 07c59cf: Added dual MPP/x402 wrappers for Express, Hono, Next.js, and MCP, backed by official x402 adapters and native MPP protocol handling. Exposed Tempo and source-chain MPP payments for compatible EVM requirements; x402 Fastify and Axios compatibility adapters were deferred.
+
+## 0.8.19
+
+### Patch Changes
+
+- 0850f5d: Preserved configured fee tokens for hosted server-driven Tempo session settlement and close transactions.
+
+## 0.8.18
+
+### Patch Changes
+
+- 61f847e: Added first-party machine-token payments for Tempo charges across push, pull, relay, and fee-sponsored settlement.
+- 981389d: Changed Stripe PaymentIntent idempotency keys to use the SDK-independent `mpp_` prefix.
+- adcf3b5: Normalized Tempo transactions before broadcast so accepted recovery ID encodings matched the node's canonical transaction hash.
+- e59c031: Added support for composing native claim implementations with Redis and Upstash store adapters.
+- 349543a: Added CI interoperability coverage against the Coinbase x402 resource server and facilitator implementations.
+- 4915654: Bundled the CLI runtime and removed source files, source maps, and source export conditions from the published package.
+- 9774481: Fixed deserialization of challenges with mixed-case auth-param names.
+- e240845: Fixed explicit session stream charges being discarded by prepaid units.
+- bc3c626: `stripe.create()`: `defaultMethods()` now returns sync SPT-only when no `depositAddresses` is provided, and uses `Promise.allSettled` in the function resolver path to gracefully degrade when individual networks fail.
+- c004d2c: Fixed hosted fee-payer sponsorship for server-driven session settlement and close transactions.
+- dc27415: Added lightweight core server and Stripe SPT entrypoints that excluded unrelated payment rails.
+- 3fd4a16: Added implicit machine-token funding to Tempo sessions and moved Tempo charges and sessions to the unified machineUSD deployment. Clients use machineUSD when a verified route and sufficient balance are available and otherwise pay the challenged token. Configured fee-token overrides were bound into session challenges, and concurrent session requests rechecked top-up requirements after serialized opens.
+- a85d55a: Hardened machine-token session flows after #800: kept stored machine channels instead of evicting them on failed retries, advertised close snapshots for signature-verified close credentials, accepted sponsored fees in the payment currency alongside a configured `feeToken`, and restored balance-aware fee-token selection for direct-channel settlement.
+- 106ba18: Fixed challenge parsing for extension parameters named after `Object.prototype` properties.
+- a74b20b: Discovery: unknown fields next to `offers` in `x-payment-info` are ignored instead of failing validation (only the spec-defined flat fields conflict with `offers`).
+- b5f6bce: Removed obsolete MPP version metadata from Stripe charge PaymentIntents.
+- 3de6560: Required server-advertised Tempo session escrows to match the canonical address unless clients enable `allowCustomEscrow`.
+- 4c9ce16: Added client signing support for standard x402 exact EIP-3009 offers without requiring mppx route-binding extensions.
+- c326dc9: Fixed Tempo session fallback closes with stale receipts and rejected invalid close accounting.
+- 81ba763: Escape characters above Latin-1 in challenge auth-params so serialized challenges are always valid HTTP header values. Previously a charge `description` containing an em dash, smart quote, or emoji made `Response` construction throw (`Cannot convert argument to a ByteString`) in fetch-compliant runtimes when the challenge was written to the `WWW-Authenticate` header.
+- ae68a55: Fixed scoped EVM charges rejecting every spec-compliant x402 client, which made
+  each route served through `Proxy` unpayable over x402.
+
+  A route scope lands in `challenge.meta`, and the x402 path treated any route
+  metadata as a demand for mppx's own `extensions.mppx` binding plus an EIP-3009
+  nonce equal to an unexported `sha256(accepted | resource | extensions)`. That
+  derivation is not part of the x402 spec, so a client mppx did not write cannot
+  produce it: the charge re-challenged forever with `Credential is malformed.`
+  `Proxy` attaches a derived scope to every charge it serves, so this applied to
+  everything behind it whether or not an operator set `scope`.
+
+  Such a credential is now bound the way x402 itself binds — by comparing the
+  echoed `resource` and `accepted` — instead of being rejected. A credential that
+  does carry `extensions.mppx` is still verified in full, including the
+  route-bound nonce, so mppx's own client is unaffected. Body binding is unchanged:
+  `challenge.digest` is verified against the request body either way.
+
+  The trade is that route scope on the x402 rail is advisory for clients that don't
+  implement mppx's binding. `resource` and `accepted` sit outside the EIP-3009
+  signature, so two charges sharing a URL and a price are no longer distinguishable
+  by scope alone. Cross-URL reuse is still refused. Operators who need scope
+  enforced can restore the previous behaviour per method:
+
+  ```ts
+  evm({
+    currency: evm.assets.base.USDC,
+    recipient,
+    x402: { facilitator, routeBinding: 'required' },
+  })
+  ```
+
+## 0.8.17
+
+### Patch Changes
+
+- 52d8701: Reject sub-cent amounts via `canOffer` before issuing 402 challenge on stripe-managed crypto rails. Add `metadata` parameter to `stripe.create()` for forwarding key-value pairs to Stripe PaymentIntents.
+- b7ab48e: Changed Tempo relay idempotency keys to use the `mpp_` prefix.
+
+## 0.8.16
+
+### Patch Changes
+
+- c58ee80: Added composable TAP and Web Bot Auth HTTPS-directory profile signers and verifiers with Ed25519 and RSA-PSS SHA-512 support, explicit replay storage, typed verification outcomes, and shared per-attempt signing context.
+- 1d7749a: Added first-class client and server request-attestation configuration to `Mppx.create()`.
+- e2b2a8a: Removed the legacy Tempo session server implementation and server compatibility exports while retaining the v1 client for existing sessions. See the [session upgrade guide](https://mpp.dev/blog/sessions-improved) for migration instructions.
+- 4637603: Aligned published and workspace dependency versions with shared pnpm catalog pins.
+- 4834ef1: Added configurable upstream error recovery hooks to proxy services and preserved request bodies across retries.
+- 00b0063: Fix js-yaml audit vulnerability (CVE-2026-59870) by bumping override to 4.3.1.
+- 81a5c6b: Fix `Method.toServer()` to pass through `onPaymentSuccess` from options.
+- f7f8e58: Fixed multi-challenge parsing when quoted parameter values contained the Payment scheme name.
+- 8e370ba: Added structured sponsor budget configuration and support for externally enforced sponsor budgets.
+- 40f430a: Multi-method intent handler: `.charge()` now works when multiple methods share an intent, internally composing all matching methods into one handler that respects `selectOffers`.
+- 1272520: Disabled the `no-underscore-dangle` lint rule.
+- 5ff5cb7: Fixed equality checks between equivalent hex and Tempo-formatted addresses.
+- 71b8884: Add per-method `onPaymentSuccess` hook to `ComposableHooks`. Routed through the server event dispatcher for error isolation.
+- 641aa4d: Kept discovery metadata aligned with runtime challenges by preserving composed offers, dispatching nested compositions, and deriving prices from canonical payment requests.
+- cd71f9e: Made attestation verifiers accept the core `AtomicStore` directly and shared its optimized `Store.tryClaim` replay primitive with Tempo charges.
+- f3a9369: Updated production dependencies.
+- 3d7ed4b: Removed obsolete compatibility shims for legacy viem Tempo call builders.
+- 47d6df7: Added server- and method-level filtering with immutable snapshots for composed HTTP payment offers across every server method constructor, including Stripe currency minimums.
+- 30f8a12: Added a session-bound WebSocket server helper that reused the configured store and settlement policy, and applied that policy to plain HTTP responses from SSE-enabled methods. Fixed automatic settlement schedules after committed Tempo session SSE and WebSocket charges.
+- 9f0afe0: Added a stable CLI launcher for workspace dependency installation.
+- bdaea3a: Standardized client transports on `getChallenges` and removed the singular `getChallenge` hook.
+- 4b3b1c0: Add `stripe.create()` machine payments API with auto deposit address resolution, PI recording, and unified `.charge()` handler.
+- fd38304: Added non-mutating credential validation and broadcast hooks to the Tempo session server method.
+- 8f9f8cb: Fixed body-bearing EVM routes to advertise `PAYMENT-REQUIRED` alongside MPP challenges and accept standard x402 payments when mppx route binding is not required.
+
+## 0.8.15
+
+### Patch Changes
+
+- 053d37d: Bumped `postcss` (via `vite`/`vite-plus`) and `tar` (via `prool`) to patched
+  versions, resolving a path-traversal advisory in `postcss`'s source map
+  loading and a stack-overflow DoS advisory in `tar`'s path filtering.
+- f538450: Replaced the expired Viem preview with the current published release, preserved primitive
+  subscription authorization validation with the updated signature types, and resolved the
+  brace-expansion audit advisory.
+- 7a277bc: Fixed `mppx validate` intermittently reporting a false `InsufficientBalance`
+  error when paying with an ephemeral Tempo testnet wallet, mislabeling
+  resolved chains in payment errors, and skipping other payment methods after
+  a Tempo testnet challenge succeeded.
+- 36bc41e: Fixed repeated session challenge retries and durable session rollback after failed payments.
+- c69087a: Refreshed expired session challenges before creating later WebSocket vouchers.
+- 538e515: Prevent sponsored Tempo charges from returning a fresh payment challenge after
+  a concurrent budget reconciliation observes their onchain receipt.
+- b900118: Fixed Tempo relay charges to delegate push payment finalization without re-broadcasting transactions.
+- f4ac248: Fixed low-level session fetches retrying vouchers for unaccepted channel opens.
+
+## 0.8.14
+
+### Patch Changes
+
+- a8e73b7: Replaced per-sender sponsored charge serialization with durable atomic aggregate fee-budget reservations. Independent expiring-nonce transactions ran concurrently, waited for capacity when the sponsor budget was full, and retained pending exposure until receipt reconciliation or transaction expiry.
+- 6156f80: Added an optional `topUpAmount` policy for batching automatic Tempo session top-ups while preserving exact-shortfall behavior by default.
+- 7711982: Added a single-file Hono Tempo API relay-backed charge example.
+- 8935947: Fixed automatic session top-ups before signing HTTP, SSE, and WebSocket credentials, including preserving a durable resumed channel after a committed top-up when the paid request failed.
+- 9cc198e: Fixed Tempo relay verification fallback and restricted server lifecycle hook combinations to unambiguous configurations.
+- a3a0d82: Use expiring nonces for sponsored and unsponsored Tempo session management transactions.
+- 4fbcd0a: Added automatic stablecoin swaps for Tempo session channel opens and top-ups.
+- 0f91d5d: Marked legacy combined payment verification hooks as deprecated in favor of separate validation and broadcast hooks.
+- 9932a58: Added structured error codes and diagnostics for payment validation failures.
+- 8f2e847: Added Tempo API relay configuration for server-side charge validation and broadcast.
+- c7c1e4b: Added generic `validate`/`broadcast` credential lifecycle APIs and a Tempo charge implementation; Tempo session credential handling remained unchanged.
+
+## 0.8.13
+
+### Patch Changes
+
+- d807f92: Improved agent environment detection for automatic JSON validate output.
+
+  Added SDK guidance when validate could not find an OpenAPI discovery document.
+
+- 2ff74a5: Fixed server method handlers to require request fields that were not configured as defaults, and exposed Tempo's resolved currency and decimals as defaults.
+- bd9b05c: Added explicit per-message amounts and cancellation signals to manual WebSocket session metering.
+- ae30448: Fixed server-driven Tempo session close and settlement transactions when the configured account is also the fee payer.
+- 92c7b6e: Fixed hosted fee payer routing for caller-provided custom Viem transports.
+- a20358e: Add a Node SQLite session `ChannelStore` that defaults to Tempo Wallet's channels database and can read existing wallet-cli v2 session rows.
+- 8e95155: Added persistent CLI payment sessions with automatic reuse, inspection, and explicit closing.
+- 8e71221: Rehydrate Tempo client sessions from server snapshots, reconciling the last accepted voucher with on-chain channel state before continuing cumulative payments.
+- fb45074: Include the highest signed voucher in Tempo session bootstrap snapshots so cold clients can safely validate and resume an existing channel.
+- 0f256ef: Added `onSessionSettlement` hook for visibility into on-chain session settlement transactions, with chain-agnostic context including trigger, txHash, channelId, cumulative amount, and incremental delta.
+
+## 0.8.12
+
+### Patch Changes
+
+- 1afe397: Fixed legacy session auto-management reusing a cached channel after the account's `authorizedSigner` changed. The client now opens a new channel instead of emitting a voucher the escrow would reject.
+- 51f948e: Added payment-aware Tempo session streams to client fetch responses.
+
+## 0.8.11
+
+### Patch Changes
+
+- be4452c: Exported SSE session controller helpers through Tempo server namespaces.
+- c40a0fc: Added continuous `main` snapshot releases.
+- 7207c0f: Added local Tempo charge fee-token selection with a pathUSD preference and an explicit override.
+- 98abd92: Extracted session SSE payment handling into a response-preserving driver.
+- 0679b0f: Added sender and final-envelope simulations before sponsored Tempo broadcasts.
+
+## 0.8.10
+
+### Patch Changes
+
+- a6969b8: Added account resolution to Tempo session managers.
+- fa73305: `mppx validate`: retry on 422, resolve `$ref` in body generation, add `--header`/`-H` flag, fix x402 validation for non-EVM chains.
+
+## 0.8.9
+
+### Patch Changes
+
+- 978f580: Fixed hosted fee-payer relays for TIP-1034 session opens and top-ups.
+- 2fb3fa8: Normalize hosted fee-payer JSON-RPC signature parity before recovery.
+
+## 0.8.8
+
+### Patch Changes
+
+- be7d166: `mppx validate`: Stripe testmode payment support. Auto-detects Stripe CLI test keys and completes card payment flows end-to-end using a test card, with graceful livemode detection.
+
+## 0.8.7
+
+### Patch Changes
+
+- 38c8229: Added Celo and Celo Sepolia to known EVM chains and assets: `chains.celo`, `chains.celoSepolia`, `assets.celo.USDC`, `assets.celo.USDT`, and `assets.celoSepolia.USDC`.
+- 264f079: Fixed session voucher replay checks for settled vouchers and mismatched credential sources.
+- 89bd31e: Fixed empty Tempo session voucher POSTs being treated as application requests by HTTP adapters that expose empty body streams.
+- 33a7c52: Updated client negotiation to prefer Payment-auth challenges before x402 challenges.
+- d3d9d81: `mppx validate`: Multi-challenge support (parses all payment methods from WWW-Authenticate), per-method field validation for Stripe/EVM/Tempo, streaming CLI output, fixed URL resolution for subpaths, and improved error reporting for malformed challenges.
+- 1157a26: `mppx validate`: EVM payment testing support. Uses the same wallet as Tempo to sign EIP-3009 authorizations, with pre-flight ERC-20 balance checks and chain-aware explorer links.
+- fd45726: Added programmatic validation API (`mppx/validation` export), OpenAPI path parameter substitution, x402 protocol detection, multi-path discovery fallback, and `--outputJson` CLI flag.
+- 86eb98c: `mppx validate`: Stream results as each phase completes instead of batching until the end. Discovery and challenge checks now appear before the payment prompt.
+
+## 0.8.6
+
+### Patch Changes
+
+- adf5207: Preserve raw response bytes when writing CLI response bodies to stdout.
+- 5e27d04: Fixed payment-aware fetch to return a post-payment `402` response with no actionable challenge instead of throwing `No method found for challenges`.
+- 8958754: Fixed Tempo session receipt waits after consecutive same-nonce transactions.
+- a2bfcc5: Normalize sponsored Tempo charge transactions before client signing.
+- 591ecf4: Preserved method-specific extension fields on receipts. `Receipt.from`, `Receipt.deserialize`, and `Receipt.fromResponse` previously stripped fields outside the base set; they now pass unknown fields through, per the core spec's Payment-Receipt provision ("Payment method specifications MAY define additional fields for receipts").
+- 7fd4ecb: Removed the mainnet network option from `mppx account fund`.
+- 00d72b0: Fixed a read-after-write race in Tempo session channel open/top-up verification. The on-chain read-back now pins to the block that included the management transaction (instead of reading `latest`) and retries transient failures, so a lagging load-balanced RPC replica can no longer reject a valid open with `on-chain channel state does not match open receipt`.
+
+## 0.8.5
+
+### Patch Changes
+
+- 754b491: Added viem token definitions and token sets to make managing tokens simpler.
+
+## 0.8.4
+
+### Patch Changes
+
+- 3136195: Fixed Tempo auto-swap call building with `viem@>=2.54` and hardened account balance metadata formatting.
+- 86b6586: Fixed Stripe CLI live-mode Shared Payment Token creation. SPT requests now send the preview `Stripe-Version` header, live-mode requests target the issued-tokens endpoint with `seller_details[network_business_profile]`, and restricted test keys (`rk_test_...`) are recognized as test mode.
+- cdd989e: Added a `mppx validate` CLI command for discovering paid endpoints, validating payment challenges, checking malformed-credential handling, and exercising Tempo payment flows end to end.
+
+## 0.8.3
+
+### Patch Changes
+
+- be8a655: Fixed Tempo charge credential creation with `viem@>=2.54` transfer call builders.
+
+## 0.8.2
+
+### Patch Changes
+
+- 80ed268: Added CLI selection of payable Tempo charge challenges and a currency override.
+- 24ddf52: Filtered unsupported x402 accepts during HTTP client challenge extraction.
+- 24ddcca: Rejected non-canonical fee-payer calldata and client-supplied access lists before sponsorship.
+- 685f698: Fixed MCP payment-aware fetch retries for tool results with payment-required metadata.
+- 8305a05: Added configurable incremental payment challenge retries for client fetch, defaulting to three.
+
+## 0.8.1
+
+### Patch Changes
+
+- 2c4086f: Disabled automatic CLI configuration discovery from local directories.
+- 2158a40: Enforced sponsor fee policies before hosted fee-payer signing.
+- ca8687b: Validated session open deposit and voucher amounts before sponsored broadcast.
+
+## 0.8.0
+
+### Minor Changes
+
+- daab9b8: **Breaking:** Collapsed `McpClient.wrap` and the in-place `wrapClient` variant into a single `McpClient.wrap` API on the `mppx/mcp/client` entrypoint.
+
+  `McpClient.wrap` now adds payment handling to an MCP SDK client in place: the client is mutated and the same reference is returned, so surfaces that keep using the original client become payment-aware (e.g. when another SDK owns the client reference, like Cloudflare Agents). The MCP SDK `callTool(params, resultSchema?, options?)` signature is preserved, payment challenges are handled whether they arrive as payment-required errors or as tool results carrying `org.paymentauth/payment-required` metadata, and the config accepts `orderChallenges` and `paymentPreferences` alongside `methods` and `onPaymentRequired`. Calling `wrap` on the same client again replaces its payment configuration.
+
+  Migration: move per-call options from the second argument to the third — `mcp.callTool(params, undefined, { context, timeout })` — and replace the approval-first overload `mcp.callTool(onPaymentRequired, params, options)` with the `onPaymentRequired` option: `mcp.callTool(params, undefined, { onPaymentRequired })` (pass `null` to bypass a configured hook). The MCP entrypoints moved to `mppx/mcp/client` and `mppx/mcp/server`; the `mppx/mcp-sdk/*` specifiers remain as aliases.
+
+- e755222: Settled MCP-over-HTTP payment challenges in the same payment-aware fetch as HTTP `402`s, so `Transport.http()` can extract JSON-RPC `-32042` challenges and retry with credentials in MCP metadata.
+- 18b57cc: Added a pluggable `channelStore` for persisting reusable payer session channels and removed the client-side `authorizedSigner` override so voucher authority is derived from the selected account.
+
+### Patch Changes
+
+- 4c79a78: Rejected empty Payment challenge IDs during construction and deserialization.
+- 7c38c17: Deprecated uppercase asset and chain aliases in favor of lowercase exports.
+- 0e88d07: Corrected PaymentRequest documentation examples to use the exported namespace name.
+- 8da60b5: Documented explicit server secret key configuration in README examples.
+- 7ab4e00: Fixed legacy session manager close amounts when receipts reported per-request spent deltas.
+- b5d8657: Updated Hono dependencies to patched versions.
+- 5e27ef2: Fixed SSE session accounting so voucher management posts no longer consumed stream charges.
+- ec1ad50: Hardened server secret-key validation and capped oversized `WWW-Authenticate` request parameters.
+- 11db0bd: Removed now-unused `wallet_authorizeChallenge` support.
+- a1199b0: Added credential-required Tempo subscription reuse and signed-source lookup support so active subscriptions could be bound to the recovered payer instead of request metadata alone.
+- e80feeb: The Tempo fee-payer (sponsor) pre-broadcast simulation now simulates the co-signed transaction the sponsor actually broadcasts — with the concrete fee payer and chosen fee token — instead of the pre-cosign `0x78` envelope, for both local and hosted (`feePayerUrl`) fee payers. This catches reverts in the exact transaction the sponsor pays gas for, and fails closed (no broadcast) when the simulation reverts.
+- c2611f6: Added `tempo.common()` as an explicit alias for the Tempo charge and session method bundle.
+- b84cc06: Added generic Tempo account resolution for charge/session credentials and primitive session voucher signatures.
+- 034315e: Updated proxy route examples to use current route handler APIs.
+- 4e5abf4: Hardened confirmed Tempo subscription settlement against T6 (TIP-1028) receive policies. Activation and renewal payments that wait for confirmation now verify that a TIP-20 `TransferWithMemo` log credits the intended recipient for the expected amount with the generated settlement memo, instead of trusting transaction success alone. Transfers held by a receiver's receive policy (redirected to `ReceivePolicyGuard`) are now rejected rather than treated as paid, and the memo binding excludes unrelated transfer effects in the same receipt. Documented that the optimistic `waitForConfirmation: false` mode cannot prove recipient credit under T6.
+- c15be54: Added `wallet_authorizeChallenge` support. JSON-RPC accounts now delegate Tempo charge and session challenges to wallets that advertise MPP support via `wallet_getCapabilities`, falling back to local signing otherwise.
+- d14d933: Bound Tempo zero-amount proof credentials to the payer wallet. The EIP-712 `Proof` typed-data now includes an `account` field (domain version bumped to `3`), so a proof signature commits to a specific payer address and can no longer be replayed against a different account — including across an access key authorized for multiple accounts. Exposed the canonical proof contract via `tempo.Proof` (`types`, `domain`, `primaryType`, `message`, `typedData`, `hash`) and added deterministic conformance vectors covering the wallet-binding property.
+
+## 0.7.0
+
+### Minor Changes
+
+- 6ae92c4: Added TIP-1034-backed Tempo sessions as the default `tempo.session` interface and moved the previous session flow to `tempo.sessionLegacy`.
+
+### Patch Changes
+
+- da6383e: Defaulted account faucet funding to testnet unless a network or RPC URL was specified.
+- 64e9d5f: Fixed hosted Tempo fee-payer fills for sender-signed sponsored charge transactions and validated sponsored fee tokens against pathUSD and chain default currencies.
+- eaac057: Added MCP client payment approval callbacks before credential creation.
+- 77520fa: Changed the Tempo session client API so `tempo.session()` created the low-level Mppx client method and `tempo.session.manager()` created the managed session lifecycle client.
+- 9859f8f: Fixed payment-aware fetch to refuse credential retries when a redirected 402 challenge response resolves to a different origin.
+- ef81337: Send the SSE `Accept` header on automatic session voucher POST updates.
+- f0ff266: Declared `@stripe/stripe-js` as a dependency so the shipped sources type-check for consumers resolving the `src` export condition. The import is type-only, so no runtime code is added.
+- 5a35a02: Added client-side Tempo chain pinning. `tempo.charge({ expectedChainId })` rejects charge challenges whose `methodDetails.chainId` conflicts with the configured chain ID, and signs on the pinned chain when the challenge omits it.
+
+## 0.6.31
+
+### Patch Changes
+
+- 1c286cd: Fixed host confusion in the Node adapter (`Request.fromNodeListener`/`toNodeListener`). Protocol-relative (`//evil.com/x`), triple-slash (`///evil.com/x`), backslash (`/\evil.com/x`), and embedded-authority (`//a//evil.com/x`) request targets could previously override the request host derived from the `Host` header, which in turn poisoned the auto-detected challenge `realm`. The adapter now copies only the parsed path and query onto a trusted origin, so the request target's authority can never influence the resulting URL host.
+- e03f5c5: Fixed `tempo.session` voucher verification to treat lower-amount voucher replays idempotently. Per the session spec's idempotency requirement, a non-advancing voucher (with a `cumulativeAmount` at or below the highest accepted amount, but above the on-chain settled amount) now returns a 200 OK receipt with the current highest amount instead of being rejected as an error. Forged or at-or-below-settled vouchers are still rejected, and the at-or-below-settled rejection reason was clarified to match the inclusive (`<=`) bound.
+- f7bf20c: Fixed SSE session voucher updates being charged as content requests.
+
+## 0.6.30
+
+### Patch Changes
+
+- 77eac81: Added the root EVM charge method export for direct `mppx/evm` helper access.
+
+## 0.6.29
+
+### Patch Changes
+
+- aca0e4a: Fixed challenge header serialization type checking for ES2020 TypeScript targets.
+- 1edd30e: Fixed WWW-Authenticate challenge serialization to escape quoted-string values and reject CRLF.
+- 5aed74b: Replaced Tempo session `authorizedSigner` options with `voucherSigner` accounts and added raw access-key voucher signing.
+- d337c11: Preserved charge supported modes and split payment defaults in challenges.
+- c95f4e2: Applied strict session fee-payer call validation to relay-sponsored transactions.
+- 2f5b92a: Bound session voucher verification to stored channel chain metadata.
+- 165bc9c: Required expiring nonce keys for fee-sponsored transactions.
+- a171438: Blocked WebSocket session metering after channel close requests.
+- ae76fb4: Retried payment credentials against the final challenge response URL.
+- 6715802: Stripped caller-supplied OpenAI tenant headers before proxying requests.
+- fbb7057: Added EVM charge support with x402 exact compatibility and resource-bound payment payload verification.
+- bf72175: Added an x402 and mpp example server/client, fixed HTTP clients to parse x402 offers when Payment-auth challenges were also present, and fixed repeated x402 EIP-3009 payments for live facilitators.
+
+## 0.6.28
+
+### Patch Changes
+
+- 6c789fa: Added store key prefix options for Store constructors and Tempo charge, session, and subscription stores.
+- b051e6c: Stripped `Set-Cookie` from upstream responses in `Proxy.scrubResponse` so an upstream service cannot set cookies under the proxy's origin.
+- 1ee47a2: Added server-side Stripe Connect settlement options for Stripe charges.
+
+## 0.6.27
+
+### Patch Changes
+
+- 27d9218: Updated Tempo chain imports to use the `viem/tempo/chains` entrypoint.
+- 22d8eed: Updated viem and ox dependencies to their latest published versions and fixed sponsored Tempo transaction gas estimation with the new versions.
+
+## 0.6.26
+
+### Patch Changes
+
+- 3d9a9cf: Added `dev_second` subscription periods.
+  Added `mppx.tempo.subscription.renew`.
+  Raised default sponsor limits for subscription payments.
+
+## 0.6.25
+
+### Patch Changes
+
+- 6c4af82: Fixed Tempo charge hash receipt verification to collapse paired transfer logs before matching expected transfers.
+- d378d68: Added a Tempo charge sender validation hook for accepting authorized third-party transfer senders.
+
+## 0.6.24
+
+### Patch Changes
+
+- bec7b56: Added challenge ordering hooks for client-side challenge filtering and sorting.
+- 8f766f8: Fixed bug where forged scope metadata could result in cross route bypass of requests.
+
+## 0.6.23
+
+### Patch Changes
+
+- c370c93: Added fee payer support and an optional `feePayerPolicy` parameter to `tempo.subscription` so activation and renewal payments can be sponsored without consuming the access key's spending limit.
+
+## 0.6.22
+
+### Patch Changes
+
+- 281fc16: Fixed Tempo subscription `wallet_authorizeAccessKey` RPC payload to send `scopes` (the spec-compliant field) instead of `allowedCalls`, and to hex-encode `limits[].limit` so the parameters match the encoded variant of the `wallet_authorizeAccessKey` schema.
+
+## 0.6.21
+
+### Patch Changes
+
+- d752fb5: Added typed client payment events for challenge handling, credential creation, payment responses, and failures.
+- 55a5b8f: Added typed server events for payment challenges, failed payments, and verified payments.
+
+## 0.6.20
+
+### Patch Changes
+
+- 868c2bf: Added Date challenge expirations and numeric Tempo subscription period counts.
+- 868c2bf: Added Tempo subscription key authorization, subscription receipt identifiers, activation replay protection, renewal idempotency, and dynamic access key handling.
+
+## 0.6.19
+
+### Patch Changes
+
+- 4fffc6a: Fixed pre-broadcast simulation in `tempo.charge` and `tempo.session` by stripping `feeToken` and `feePayerSignature` from the simulation request, so the node does not try to recover `feePayerSignature` against a sender signature that viem's `call` action never includes.
+
+## 0.6.18
+
+### Patch Changes
+
+- d365b41: Added Tempo CLI auto-swap and payment source token options.
+- 9f660c2: Added Tempo CLI network shortcuts and challenge chain mismatch checks.
+- 538c7fb: Added CLI commands for browsing the MPP services registry.
+
+## 0.6.17
+
+### Patch Changes
+
+- 33df58b: Fixed Tempo session close and settle transactions to resolve funded Tempo fee tokens before signing.
+
+## 0.6.16
+
+### Patch Changes
+
+- b711dc5: Preserved raw challenge opaque values when parsing and echoing credentials.
+- 5059bfa: Fixed Tempo charge push verification for smart-account transaction hashes.
+
+## 0.6.15
+
+### Patch Changes
+
+- 2b1cf51: Rejected expired challenges before client-side credential creation.
+
+## 0.6.14
+
+### Patch Changes
+
+- ddf590e: Hardened Tempo session billing against concurrent replay, bodyless POST bypasses, inflated receipts, and close races.
+- e53d3cd: Fixed Express middleware to short-circuit Tempo session management responses before route handlers run.
+- 02663ab: Hardened fee-payer gas sponsorship validation.
+
+## 0.6.13
+
+### Patch Changes
+
+- Blocked Tempo session charges after a channel force-close was requested and rejected reserved SSE charges during pending close.
+
+## 0.6.12
+
+### Patch Changes
+
+- Fixed missing challenge-bound memo validation for Tempo pull transactions.
+
+## 0.6.11
+
+### Patch Changes
+
+- Fixed Tempo clients and the CLI to prioritize local escrow and deposit configuration over server-provided session challenge overrides.
+
+## 0.6.10
+
+### Patch Changes
+
+- Fixed SSE message encoding so multiline payloads could not forge downstream payment control events.
+
+## 0.6.9
+
+### Patch Changes
+
+- Fixed Stripe proxy to strip caller-supplied `Stripe-Account` headers before forwarding requests upstream.
+
+## 0.6.8
+
+### Patch Changes
+
+- b5561f5: Added an actionable error when Linux account storage cannot find secret-tool.
+
+## 0.6.7
+
+### Patch Changes
+
+- Fixed zero-amount Tempo proof verification to validate non-keychain signature envelopes before trusting their signer address.
+
+## 0.6.6
+
+### Patch Changes
+
+- 78bb8c8: Bumped `ox` to `0.14.18` so the bundled Tempo payment UI preserves `limits[].period` in the on-chain `KeyAuthorization`. Without this, per-period access keys failed signer recovery and silent signing fell back to the wallet approval dialog.
+
+## 0.6.5
+
+### Patch Changes
+
+- 3c5cd4b: Fixed zero-amount Tempo proof credentials to bind signatures to the challenge realm.
+- 24604ff: Fixed MCP stdio startup and returned structured CLI command results without writing raw tool output to stdout.
+
+## 0.6.4
+
+### Patch Changes
+
+- 0d1e548: Fixed credential `opaque` serialization to use the spec-compliant base64url string shape, while keeping deserialization backward-compatible with legacy object-shaped credentials.
+- 9536014: Added canonical discovery output using `x-payment-info.offers[]` while continuing to accept the legacy flat shorthand during validation and parsing.
+
+## 0.6.3
+
+### Patch Changes
+
+- 530a6ff: Validate session settle/close senders against the channel payee so raw delegated access-key accounts fail fast with a clear error, and use the raw Tempo transaction path for access-key-compatible settlement and close flows.
+
+## 0.6.2
+
+### Patch Changes
+
+- 57354de: Added scope-bound challenge metadata for route replay protection, scope-aware `verifyCredential()` checks, and adapter auto-scoping for Hono and proxy routes.
+
+## 0.6.1
+
+### Patch Changes
+
+- Fixed cross-route credential replay checks by binding `unitType` and allowing `verifyCredential()` to validate credentials against expected route context.
+
+## 0.6.0
+
+### Minor Changes
+
+- e606fa9: **Breaking:** Removed default `Accept-Payment` headers on every outgoing request for polyfilled fetch in browsers. Now defaults to same-origin requests in browser environments. Non-browser environments are unaffected. Use `acceptPaymentPolicy` to control supported payment origins.
+
+### Patch Changes
+
+- e606fa9: Added `acceptPaymentPolicy` option to control when the `Accept-Payment` header is injected on outgoing requests, mitigating CORS preflight failures on non-payment-aware servers.
+  - In browsers, `Fetch.polyfill` and `Mppx.create` (with `polyfill: true`) default to `'same-origin'`, preventing cross-origin CORS issues.
+  - Non-browser environments and `Mppx.create` with `polyfill: false` default to `'always'`.
+  - Supported values: `'always'`, `'same-origin'`, `'never'`, `{ origins: string[] }` (with `*.` wildcard support).
+  - Exported `Fetch` namespace from `mppx/client`.
+
+- 1a831eb: Fixed Tempo session content gating and SSE plain-response billing to share request-body detection so HTTP/2 POST requests without Content-Length were classified consistently.
+
+## 0.5.17
+
+### Patch Changes
+
+- 3259157: Added `mppx account export` command for exporting the private key of local keychain-backed accounts.
+
+## 0.5.16
+
+### Patch Changes
+
+- 5b6a938: Thread context through pinned requests so MCP tool calls and HEAD requests cannot bypass the shared management-vs-content gate.
+- 22be301: Preserve `keyAuthorization` in fee-sponsored Tempo charge transactions and reject unsupported transaction fields instead of silently dropping them.
+- 3e7320d: Charge `tempo/session` SSE streams with `unitType: "request"` once per streamed response instead of once per emitted SSE data event.
+
+## 0.5.15
+
+### Patch Changes
+
+- 7aff8ab: Prevented default HTTP `tempo.session()` content requests from replaying the same accepted voucher without advancing request/response accounting.
+- 7aff8ab: Pinned credential verification and compose dispatch to challenge `opaque` metadata so same-economics sibling routes could not replay each other's credentials.
+
+## 0.5.14
+
+### Patch Changes
+
+- 1ba7af2: Hardened sponsored Tempo session `open` and `topUp` flows by enforcing fee-payer policy limits, blocking call smuggling, and adding `feePayerPolicy` support.
+- 1ba7af2: Fixed fee-sponsored Tempo charge flows by simulating sponsored transactions before broadcast and binding swap approvals to the DEX input token.
+- 1ba7af2: Normalized Tempo session channel IDs across storage and verification paths, preventing case-variant aliases from creating duplicate channel state.
+
+## 0.5.13
+
+### Patch Changes
+
+- 7e16df7: Make Tempo charge fee-sponsorship policy resolve per chain and allow overriding it with `feePayerPolicy`.
+- 13d2851: Fixed Tempo HTML pay button text overrides and make the HTML page title follow a custom `paymentRequired` label when `title` is omitted.
+- e81f45c: Add Tempo charge `supportedModes` request support so clients and servers can explicitly negotiate `push` vs `pull` settlement.
+
+## 0.5.12
+
+### Patch Changes
+
+- f6ce313: Add typed `paymentPreferences` support that emits `Accept-Payment` on client requests and filters composed server challenges accordingly.
+- 7059598: Accept zero-dollar proof credentials signed by authorized Tempo access keys and export Tempo proof DID helpers from `mppx/tempo`.
+- b6a18c4: Raised too low fee-payer `maxTotalFee` policy
+
+## 0.5.11
+
+### Patch Changes
+
+- 2aff2c0: Handled malformed Host headers in the Node request listener instead of letting them crash the process.
+
+## 0.5.10
+
+### Patch Changes
+
+- d95c01c: Pruned internal dependencies.
+
+## 0.5.9
+
+### Patch Changes
+
+- 4d7fe94: Bumped internal deps
+
+## 0.5.8
+
+### Patch Changes
+
+- 00572a0: Normalized Tempo fee-payer co-signing for charge flows so the final sponsored transaction is rebuilt from validated fields with centralized fee-payer policy checks.
+- 7d4fdab: Centralize the authoritative challenge verification inputs by adding captured-request and verified-envelope context plumbing, shared canonical HMAC input generation, and a single pinned-request comparison path without changing the existing server hook model.
+- b087c21: Add an optional atomic `Store.update()` primitive for custom store backends and use it to make Tempo replay protection and channel state updates safe across distributed deployments.
+
+## 0.5.7
+
+### Patch Changes
+
+- 9cffd24: Added `Config`, `Text`, and `Theme` type exports to `mppx/html` entrypoint.
+
+## 0.5.6
+
+### Patch Changes
+
+- 0c4ce6f: Added `.compose` support to HTML payment links.
+
+## 0.5.5
+
+### Patch Changes
+
+- e7147c2: Bind attribution memo nonce to challenge ID. The 7-byte nonce field (bytes 25–31) is now derived from `keccak256(challengeId)[0..6]` instead of random bytes, preventing transaction hash stealing in push mode. `Attribution.encode()` now requires `challengeId`. The server verifies challenge binding and server fingerprint for `hash` (push) credentials. Pull-mode `transaction` credentials are not affected — the server controls broadcast, so there is no hash-stealing risk.
+
+  **Breaking:** `Attribution.encode()` now requires `challengeId` — callers must pass the challenge ID to generate a memo. Old push-mode clients that generate random attribution nonces or plain transfers without memos are rejected by the server. Pull-mode clients are unaffected.
+
+## 0.5.4
+
+### Patch Changes
+
+- c3f522c: Fixed CLI defaulting to testnet when `--rpc-url` is omitted. The CLI now defaults to Tempo mainnet. Also added `resolveRpcUrl` helper so `MPPX_RPC_URL` and `RPC_URL` env vars are respected consistently across all commands.
+- f086276: Added theming to automatic HTML payment links.
+
+## 0.5.3
+
+### Patch Changes
+
+- ba0bb60: Override vulnerable `lodash` (`<=4.17.23`) to `>=4.18.0` in pnpm overrides. Fixes code injection via `_.template` ([GHSA-r5fr-rjxr-66jc](https://github.com/advisories/GHSA-r5fr-rjxr-66jc)) and prototype pollution via `_.unset`/`_.omit` ([GHSA-f23m-r3pf-42rh](https://github.com/advisories/GHSA-f23m-r3pf-42rh)).
+
+## 0.5.2
+
+### Patch Changes
+
+- 2a7dbd3: Added experimental support for payment links
+- 20f3fe4: Hardened credential verification, transport billing, error responses, and proxy routing. Credential request binding now verifies fields match the actual incoming request. SSE transport derives billing context directly from the verified credential payload. 402 error responses no longer leak internal details. Proxy routing binds management POST fallback to the credential's payment method and intent for correct disambiguation.
+
+## 0.5.1
+
+### Patch Changes
+
+- dd27cb1: Validate the `did:pkh:eip155` source DID on zero-dollar Tempo proof credentials. Servers now reject malformed proof source DIDs and chain ID mismatches between the source DID and the challenge signing domain.
+
+## 0.5.0
+
+### Minor Changes
+
+- 5e7750b: Added a `proof` credential type for zero-amount Tempo charge requests. Clients now sign an EIP-712 proof over the challenge ID instead of creating a broadcastable transaction, and servers verify the proof against the credential source DID before accepting the request. This prevents zero-dollar auth flows from burning gas when the payer would otherwise have been the fee payer.
+
+## 0.4.12
+
+### Patch Changes
+
+- 5684b94: Fixed `settleOnChain` and `closeOnChain` to use the payee account as
+  `msg.sender` instead of the fee payer when submitting fee-sponsored
+  transactions. Previously, `sendFeePayerTx` used the fee payer as both
+  sender and gas sponsor, causing the escrow contract to revert with
+  `NotPayee()`. Added `account` option to `tempo.settle()` so callers can
+  specify the signing account separately from the fee payer.
+- 3bc8657: Added compile-time guard to `tempo.session()` and `tempo.charge()`. Unknown properties (e.g. `stream` instead of `sse`) now cause a type error instead of being silently accepted.
+- 0531edd: Added split-payment support to Tempo charge requests, including client transaction construction and stricter server verification for split transfers.
+- 6188184: Added `realm` auto-detection from the request `Host` header when not explicitly configured. Resolution order: explicit value → env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) → request URL hostname → `"MPP Payment"` fallback with a one-time warning. Removed the hard-coded `"MPP Payment"` default and deprioritized `HOST`/`HOSTNAME` env vars in favor of platform-specific alternatives.
+- ba79504: Return `410 ChannelClosedError` instead of `402 AmountExceedsDepositError` when a channel's on-chain deposit is zero but the channel still exists (payer is non-zero). This handles a race window during settlement where the escrow contract zeros the deposit before setting the finalized flag.
+
+## 0.4.11
+
+### Patch Changes
+
+- Fixed close voucher validation to reject vouchers equal to the on-chain settled amount. ([GHSA-mv9j-8jvg-j8mr](https://github.com/wevm/mppx/security/advisories/GHSA-mv9j-8jvg-j8mr))
+- Added Stripe credential replay protection via the `Idempotent-Replayed` header. ([GHSA-8mhj-rffc-rcvw](https://github.com/wevm/mppx/security/advisories/GHSA-8mhj-rffc-rcvw))
+
+## 0.4.10
+
+### Patch Changes
+
+- b4e1a3d: Add OpenAPI-first discovery tooling via `mppx/discovery`, framework `discovery()` helpers, and `mppx discover validate`.
+
+  This also changes `mppx/proxy` discovery routes:
+  - `GET /openapi.json` is now the canonical machine-readable discovery document.
+  - `GET /llms.txt` remains available as the text-friendly discovery view.
+  - Legacy `/discover*` routes now return `410 Gone`.
+
+- 70f6595: Fix two production session/SSE robustness issues.
+  1. Accept exact voucher replays (`cumulativeAmount == highestVoucherAmount`) as idempotent success after signature verification, while still rejecting lower cumulative amounts and preserving monotonic state advancement rules.
+  2. Prevent invalid null-body response wrapping in SSE receipt transport by returning `101/204/205/304` responses directly instead of stream-wrapping them.
+
+- 3c713c9: `tempo.session()` now throws immediately at initialization if no viem `Account` is provided, instead of failing later with an opaque error during channel close. The error message includes an example fix.
+
+## 0.4.9
+
+### Patch Changes
+
+- d9b651d: Added `Store.redis()` adapter for standard Redis clients (ioredis, node-redis, Valkey) with BigInt-safe serialization.
+- b69bbee: Fixed Express middleware hanging by constructing a Fetch `Request` directly from Express's `req` API.
+- 7da6cfd: Fixed SSE header normalization.
+- a2c6cc9: Skipped route amount/currency/recipient validation for topUp and voucher credentials. These `POST`s carry no application body so the route's request hook may produce a different amount than the challenge echoed from the original request. The on-chain voucher signature is the real validation.
+
+## 0.4.8
+
+### Patch Changes
+
+- 99920d0: Updated validation. ([GHSA-8x4m-qw58-3pcx](https://github.com/wevm/mppx/security/advisories/GHSA-8x4m-qw58-3pcx))
+
+## 0.4.7
+
+### Patch Changes
+
+- 2a0b88e: Fixed cooperative close to sign the server-reported spent amount instead of the high-water mark (`cumulativeAmount`), preventing overcharging when actual usage was below the pre-authorized voucher amount.
+
+## 0.4.6
+
+### Patch Changes
+
+- 281005c: Added support for `feePayer` as a URL string on `tempo` method.
+
+## 0.4.5
+
+### Patch Changes
+
+- bbd4b3f: Updated Moderato (testnet) escrow contract address to `0xe1c4d3dce17bc111181ddf716f75bae49e61a336`.
+
+## 0.4.4
+
+### Patch Changes
+
+- b09a35a: fix: update getChannel ABI field order to match new escrow contract
+- c520705: Fixed `Client.getResolver` to inject Tempo serializers onto clients missing them, preventing the default serializer from rejecting Tempo-specific transaction fields.
+- b09a35a: chore: update mainnet escrow contract address
+
+## 0.4.3
+
+### Patch Changes
+
+- 7f8d103: chore: update mainnet escrow contract address
+
+## 0.4.2
+
+### Patch Changes
+
+- c089da5: Added CLI config via `mppx.config.(js|mjs|ts)`. Allows for extending `mppx` CLI to support non-built-in methods.
+
+## 0.4.1
+
+### Patch Changes
+
+- f2bc051: Support keychain V2 (`0x04`) signatures via ox 0.14 upgrade
+
+## 0.4.0
+
+### Minor Changes
+
+- 143ebc9: Support handler function refs in `compose()`.
+  - **`[mppx.tempo.charge, { amount: '1' }]` syntax** — `compose()` now accepts handler function references (e.g. `mppx.tempo.charge`) as the first element of entry tuples, in addition to `Method.AnyServer` objects and `"name/intent"` string keys.
+  - **`_method` metadata on nested handlers** — nested handler functions are tagged with their source `Method.AnyServer`, enabling `compose()` to resolve the correct handler.
+
+### Patch Changes
+
+- db2033c: Set `feeToken` during server co-sign and simulation for fee-payer transactions.
+
+  When the client sends a fee-payer (0x78) envelope, `feeToken` is intentionally omitted. The server must set it at co-sign time, but previously never did — causing "Fee token spending limit exceeded" errors. Now resolves `feeToken` from the deserialized transaction or falls back to the chain's default currency.
+
+## 0.3.16
+
+### Patch Changes
+
+- 79bbfc6: Added multi-challenge `mppx.challenge()` combinator for presenting multiple payment methods in a single 402 response, nested accessors (`mppx.tempo.charge(...)`), `Mppx.challenge()` static, `Challenge.fromResponseList()`, and automatic client preference-based challenge selection.
+- b4f3c92: Migrated to use `call` instead of manual `eth_estimateGas`.
+
+## 0.3.15
+
+### Patch Changes
+
+- cd42c28: Added `rawFetch` property to the client `Mppx` instance, exposing the original unwrapped fetch function for requests that should bypass 402 payment interception.
+- 230ef16: Moved CLI payment logs (Payment Required, Payment Receipt, channel open/close) behind `-v` flag. Added `-vv` for full HTTP headers.
+
+## 0.3.14
+
+### Patch Changes
+
+- 345425f: Removed `expires` from charge request schemas (tempo, stripe). Expiry is now conveyed exclusively via the `expires` auth-param on the Challenge, not duplicated in the request body. Server handlers default to `Expires.minutes(5)` when `expires` is not explicitly provided.
+- eb19f32: Added `mode` parameter to `tempo.charge()` client — `'push'` (client broadcasts tx, sends hash) and `'pull'` (client signs tx, server broadcasts). Defaults to `'push'` for JSON-RPC accounts, `'pull'` otherwise.
+
+## 0.3.13
+
+### Patch Changes
+
+- 82206f5: Made `constantTimeEqual` isomorphic by replacing `node:crypto` with `ox` sha256 and a custom constant-time comparison.
+
+## 0.3.12
+
+### Patch Changes
+
+- c28944e: Added `autoSwap` flag to `tempo` method. When enabled, the client automatically swaps from supported currencies via the DEX if the payer lacks the target token.
+- 9c23cb7: Fixed fetch polyfill to pass `init` through unmodified for non-402 responses. Previously, every request eagerly destructured `init` to strip the `context` property, creating a new object that could break libraries relying on object identity (e.g. WebSocket upgrade handshakes).
+
+## 0.3.11
+
+### Patch Changes
+
+- fd466c3: Added `waitForConfirmation` option to `session()` and `charge()` payment methods. When `false`, transactions are simulated via `eth_estimateGas` and broadcast without waiting for on-chain confirmation, reducing latency.
+- ddb7057: Fixed `Handlers` type to omit shorthand intent keys when multiple methods share the same intent, matching runtime behavior and preventing `TypeError` on collision.
+
+## 0.3.10
+
+### Patch Changes
+
+- 558279e: Added `closeRequestedAt` check in session voucher handler with configurable `channelStateTtl` (default: 60s). Prevented payers from using a channel after initiating a forced close.
+- 558279e: Added expiration check on credentials in the core handler. Expired credentials are now rejected with `PaymentExpiredError` instead of being processed.
+- 558279e: Added token address validation in `broadcastTopUpTransaction` fee-payer logic. Prevented approve calls to arbitrary contracts in fee-sponsored topUp transactions.
+- 558279e: Bound credential verification to the route's configured request. Prevented cross-route scope confusion where a credential issued for one route could be presented at another.
+- 558279e: Removed insecure hardcoded `'tmp'` fallback for `secretKey`. `Mppx.create()` now throws a clear error if neither `MPP_SECRET_KEY` env var nor explicit `secretKey` is provided.
+- 5d4bb93: Removed `realm` from `PaymentRequiredError` detail message to avoid leaking deployment URLs and hostnames in error responses.
+
+## 0.3.9
+
+### Patch Changes
+
+- a016e1f: Added fee payer support to `settleOnChain` and `closeOnChain` for server-originated transactions on chains where the server EOA has no native tokens. Transactions are built using `prepareTransactionRequest` → dual-sign → `sendRawTransactionSync` with an explicitly resolved fee token.
+
+## 0.3.8
+
+### Patch Changes
+
+- 7cb0d5f: Fixed CLI failing with "No account found" when `MPPX_PRIVATE_KEY` is set to an empty string.
+
+## 0.3.7
+
+### Patch Changes
+
+- e4f0138: Added `nonceKey: 'expiring'` to tempo charge transactions to avoid nonce collisions on parallel requests.
+
+## 0.3.6
+
+### Patch Changes
+
+- d2fb5e3: Fixed issue where mainnet would not default to USDC unless `testnet: false` was explicitly passed.
+
+## 0.3.5
+
+### Patch Changes
+
+- 6e2be11: Replaced `--channel <id>` and `--deposit <amount>` CLI flags with `-M`/`--method-opt` for passing method-specific options.
+
+  ```diff
+  # Before
+  - mppx example.com/content --channel 0x123 --deposit 1000000
+
+  # After
+  + mppx example.com/content -M channel=0x123 -M deposit=1000000
+  ```
+
+- 6e2be11: Added Stripe payment method support to the CLI.
+
+  ```bash
+  # Set your Stripe test-mode secret key
+  export MPPX_STRIPE_SECRET_KEY=sk_test_...
+
+  # Make a request to a Stripe-enabled endpoint
+  mppx https://example.com/content
+  ```
+
+- 955deb2: Renamed USDC.e to USDC in account view token list.
+
+## 0.3.4
+
+### Patch Changes
+
+- 9cf4943: Added USDC.e to account view mainnet token list and use `MPPX_RPC_URL` for default mainnet balance fetching.
+- 11c0422: Renamed internal `stream` terminology to `session` to align with the MPP spec. This includes renaming the `src/tempo/stream/` directory to `src/tempo/session/`, updating all problem type URIs from `…/problems/stream/…` to `…/problems/session/…`, and renaming associated types (e.g., `StreamCredentialPayload` → `SessionCredentialPayload`). No public API changes.
+
+## 0.3.3
+
+### Patch Changes
+
+- 04b04c9: Added auto-detection of `realm` and `secretKey` from environment variables in `Mppx.create()`.
+  - **Realm**: checks `MPP_REALM`, `FLY_APP_NAME`, `HEROKU_APP_NAME`, `HOST`, `HOSTNAME`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `VERCEL_URL`, `WEBSITE_HOSTNAME`
+  - **Secret key**: checks `MPP_SECRET_KEY`
+
+## 0.3.2
+
+### Patch Changes
+
+- b927c06: - `mppx/proxy`: Modified routes to show service in path for completeness (e.g. `POST /openai/v1/chat/completions` instead of `POST /v1/chat/completions`).
+
+## 0.3.1
+
+### Patch Changes
+
+- e6c9f85: Fixed `/discover.md` route returning 404.
+
+## 0.3.0
+
+### Minor Changes
+
+- d60f623: - **`mpp/proxy` (Breaking):** Renamed `/services*` discovery routes to `/discover*`.
+  - `mpp/proxy`: Simplified `llms.txt` to a brief service overview, linking each service to `/discover/<id>`.
+  - `mpp/proxy`: Added `/discover` and `/discover/<id>` endpoints with content negotiation (JSON by default, markdown for `Accept: text/markdown`/`text/plain` or bot/CLI user agents).
+  - `mpp/proxy`: Added `.md` extension variants (`/discover.md`, `/discover/<id>.md`) for explicit markdown.
+  - `mpp/proxy`: Added `/discover/all` for full markdown listing with route details.
+
+## 0.2.6
+
+### Patch Changes
+
+- 83c3bab: - Added `title` and `description` options to `Proxy.create` config, used to populate the `llms.txt` heading and description.
+
+  ```ts
+  const proxy = Proxy.create({
+    title: 'My AI Gateway',
+    description: 'A paid proxy for LLM and AI services.',
+    services: [...]
+  })
+  ```
+
+  - Added `title`, `description`, and `docsLlmsUrl` properties to `Service` type and `Service.from` config.
+
+  ```ts
+  Service.from('my-api', {
+    baseUrl: 'https://api.example.com',
+    title: 'My API',
+    description: 'A custom API service.',
+    docsLlmsUrl: 'https://example.com/llms.txt',
+    routes: { ... },
+  })
+
+  // or with per-endpoint docs
+  Service.from('my-api', {
+    baseUrl: 'https://api.example.com',
+    docsLlmsUrl: (endpoint) =>
+      endpoint
+        ? `https://example.com/api/${encodeURIComponent(endpoint)}.md`
+        : 'https://example.com/llms.txt',
+    routes: { ... },
+  })
+  ```
+
+## 0.2.5
+
+### Patch Changes
+
+- 01fa8ba: Added fallback `authorizedSigner` to `account.accessKeyAddress` when not explicitly provided.
+
+## 0.2.4
+
+### Patch Changes
+
+- 83d0175: Bumped `viem` peer dependency to `>=2.46.2`.
+
+## 0.2.3
+
+### Patch Changes
+
+- c0aa6ad: Fixed Stripe `createWithClient` to use `shared_payment_granted_token` instead of `payment_method` when creating a PaymentIntent with an SPT. This aligns the SDK client path with the raw fetch path and fixes 402 errors on credential retry.
+- e7f5985: Rejected keychain and non-secp256k1 signatures in `verifyVoucher`.
+
+## 0.2.2
+
+### Patch Changes
+
+- 360fc03: Added `Json.canonicalize` from `ox`
+
+## 0.2.1
+
+### Patch Changes
+
+- eb72c76: **Breaking:**
+  - Renamed `Challenge.fromIntent` to `Challenge.fromMethod`.
+  - Renamed `PaymentRequest.fromIntent` to `PaymentRequest.fromMethod`.
+
+## 0.2.0
+
+### Minor Changes
+
+- 627f5ec: **Breaking:**
+  - Renamed `Intent` and `MethodIntent` modules to `Method`.
+  - Removed `Intent` export from `mppx`. Use `Method` instead.
+  - Removed `MethodIntent` export from `mppx`. Use `Method` instead.
+  - Renamed `MethodIntents` export to `Methods` in `mppx/tempo` and `mppx/stripe`.
+
+## 0.1.1
+
+### Patch Changes
+
+- 910102d: Fixed SSE streaming reliability: pass `signal` through `SessionManager.sse()` so HTTP connections close on abort, snapshot challenge at SSE open time to prevent concurrent requests from corrupting voucher credentials, and forward `request.signal` to `Sse.serve()` so `chargeOrWait` breaks on disconnect.
+
+## 0.1.0
+
+### Minor Changes
+
+- badab1a: Initial release.

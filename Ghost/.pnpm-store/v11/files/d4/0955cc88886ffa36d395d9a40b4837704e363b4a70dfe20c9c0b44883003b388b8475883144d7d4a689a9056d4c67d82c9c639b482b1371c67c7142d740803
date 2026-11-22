@@ -1,0 +1,523 @@
+import { BaseError as viem_BaseError, ExecutionRevertedError, HttpRequestError, InternalRpcError, isAddress, isAddressEqual, LimitExceededRpcError, parseUnits, ResourceUnavailableRpcError, RpcRequestError, SocketClosedError, TimeoutError, WaitForTransactionReceiptTimeoutError, WebSocketRequestError, zeroAddress, } from 'viem';
+import { BadRequestError, ChannelClosedError, ChannelNotFoundError, InsufficientBalanceError, VerificationFailedError, } from '../../../Errors.js';
+import { isSessionContentRequest } from '../../server/internal/request-body.js';
+import * as Chain from '../precompile/Chain.js';
+import { readSettledReceiptFields } from '../precompile/Chain.js';
+import { uint96, } from '../precompile/Protocol.js';
+import * as ChannelStore from './ChannelStore.js';
+function isObject(value) {
+    return typeof value === 'object' && value !== null;
+}
+function isAccount(value) {
+    return isObject(value) && typeof value.address === 'string' && isAddress(value.address);
+}
+/** Reads the optional `feePayer` field from an untrusted request object. */
+export function readRequestFeePayer(value) {
+    if (!isObject(value))
+        return undefined;
+    const feePayer = value.feePayer;
+    if (feePayer === undefined || typeof feePayer === 'boolean')
+        return feePayer;
+    if (isAccount(feePayer))
+        return feePayer;
+    return undefined;
+}
+/** Resolves whether a challenge should advertise fee sponsorship or a credential can use it. */
+export function resolveRequestFeePayer(parameters) {
+    const { credential, defaultFeePayer, parameterFeePayer, requestFeePayer } = parameters;
+    if (requestFeePayer === false)
+        return credential ? false : undefined;
+    const account = typeof requestFeePayer === 'object' ? requestFeePayer : defaultFeePayer;
+    const hosted = parameterFeePayer === true || typeof parameterFeePayer === 'string';
+    if (credential)
+        return account ?? (hosted ? true : undefined);
+    if (account || hosted)
+        return true;
+    return undefined;
+}
+/** Resolves the fee-payer account allowed for an incoming credential. */
+export function resolveCredentialFeePayer(parameters) {
+    const { feePayer, methodDetails, request } = parameters;
+    const requestFeePayer = readRequestFeePayer(request);
+    const requestAllowsFeePayer = requestFeePayer === undefined || requestFeePayer === true || typeof requestFeePayer === 'object';
+    if (methodDetails.feePayer !== true || !requestAllowsFeePayer)
+        return undefined;
+    if (typeof requestFeePayer === 'object')
+        return requestFeePayer;
+    if (typeof feePayer === 'object')
+        return feePayer;
+    return feePayer === true || typeof feePayer === 'string' ? true : undefined;
+}
+const scheduledSettlementLeaseMs = 5 * 60_000;
+/** Converts a public settlement schedule into raw-unit thresholds. */
+export function resolveSettlementSchedule(schedule, decimals) {
+    if (!schedule)
+        return undefined;
+    return {
+        ...(schedule.amount !== undefined && {
+            amount: typeof schedule.amount === 'bigint'
+                ? schedule.amount
+                : parseUnits(schedule.amount, decimals),
+        }),
+        ...(schedule.intervalMs !== undefined && { intervalMs: schedule.intervalMs }),
+        ...(schedule.units !== undefined && { units: schedule.units }),
+    };
+}
+/**
+ * Computes the schedule progress for an unsettled precompile-backed channel.
+ *
+ * Returns `undefined` for channels that cannot be scheduled: non-precompile
+ * records, or channels without an accepted voucher above the settled amount and
+ * within `spent` (see {@link ChannelStore.resolveSettleableVoucher}).
+ */
+export function resolveSettlementProgress(channel) {
+    if (!ChannelStore.isPrecompileState(channel))
+        return undefined;
+    // A settlement captures a voucher whole, so only a voucher within spend can be scheduled.
+    if (!ChannelStore.resolveSettleableVoucher(channel))
+        return undefined;
+    const amountBoundary = channel.lastSettlementSpent ?? channel.settledOnChain;
+    const timestampBoundary = Date.parse(channel.lastSettlementAt ?? channel.createdAt);
+    return {
+        amount: channel.spent - amountBoundary,
+        ...(Number.isFinite(timestampBoundary) && {
+            elapsedMs: Date.now() - timestampBoundary,
+        }),
+        units: channel.units - (channel.lastSettlementUnits ?? 0),
+    };
+}
+/** Returns whether the precompile channel has crossed any configured settlement threshold. */
+export function isSettlementDue(channel, schedule) {
+    if (!schedule)
+        return false;
+    const progress = resolveSettlementProgress(channel);
+    if (!progress)
+        return false;
+    // A detected force-close makes outstanding vouchers immediately due.
+    if (!channel.finalized && channel.closeRequestedAt > 0n)
+        return true;
+    if (schedule.units !== undefined && progress.units >= schedule.units)
+        return true;
+    if (schedule.amount !== undefined && progress.amount >= schedule.amount)
+        return true;
+    if (schedule.intervalMs !== undefined && (progress.elapsedMs ?? 0) >= schedule.intervalMs)
+        return true;
+    return false;
+}
+/** Releases a completed scheduled settlement lease; {@link settle} records the settled counters. */
+export async function markSettlementComplete(parameters) {
+    const { channelId, leaseOwner, store, settledAt = new Date().toISOString() } = parameters;
+    await store.updateChannel(channelId, (current) => {
+        if (!current)
+            return current;
+        if (current.scheduledSettlementLease?.owner !== leaseOwner)
+            return current;
+        const { scheduledSettlementLease: _, ...channel } = current;
+        return { ...channel, lastSettlementAt: settledAt };
+    });
+}
+/** Atomically claims one due scheduled settlement across server workers. */
+export async function claimScheduledSettlement(parameters) {
+    const { channelId, leaseMs = scheduledSettlementLeaseMs, schedule, store } = parameters;
+    const now = Date.now();
+    const owner = globalThis.crypto.randomUUID();
+    let claimed = false;
+    await store.updateChannel(channelId, (current) => {
+        claimed = false;
+        if (!current || !isSettlementDue(current, schedule))
+            return current;
+        const lease = current.scheduledSettlementLease;
+        if (lease && lease.expiresAt > now)
+            return current;
+        claimed = true;
+        return {
+            ...current,
+            scheduledSettlementLease: { expiresAt: now + leaseMs, owner },
+        };
+    });
+    return claimed ? owner : undefined;
+}
+/** Extends an owned scheduled settlement lease while its transaction is in flight. */
+export async function renewScheduledSettlement(parameters) {
+    const { channelId, leaseMs = scheduledSettlementLeaseMs, leaseOwner, store } = parameters;
+    await store.updateChannel(channelId, (current) => {
+        if (!current || current.scheduledSettlementLease?.owner !== leaseOwner)
+            return current;
+        return {
+            ...current,
+            scheduledSettlementLease: { expiresAt: Date.now() + leaseMs, owner: leaseOwner },
+        };
+    });
+}
+/** Releases a scheduled settlement claim after a failed attempt. */
+export async function releaseScheduledSettlement(parameters) {
+    const { channelId, leaseOwner, store } = parameters;
+    await store.updateChannel(channelId, (current) => {
+        if (!current || current.scheduledSettlementLease?.owner !== leaseOwner)
+            return current;
+        const { scheduledSettlementLease: _, ...channel } = current;
+        return channel;
+    });
+}
+/** Returns whether an accepted credential will authorize and charge an HTTP content response. */
+export function shouldApplyVerifiedHttpAccounting(parameters) {
+    const { capturedRequest, payloadAction, sseEnabled, unitType } = parameters;
+    if (!capturedRequest)
+        return false;
+    if (payloadAction !== 'open' && payloadAction !== 'voucher')
+        return false;
+    if (sseEnabled && capturedRequest.method === 'POST' && unitType !== 'request')
+        return false;
+    return isSessionContentRequest(capturedRequest);
+}
+/**
+ * Returns whether a voucher pays for its request in the store update that accepts it. A
+ * request-priced content request is charged exactly once, so this is the charge the HTTP
+ * accounting or the streamed response would make, without a second store update; the receipt is
+ * then marked prepaid so an SSE response does not charge again.
+ */
+export function shouldChargeVoucherOnAcceptance(parameters) {
+    const { capturedRequest, payloadAction, unitType } = parameters;
+    if (!capturedRequest || payloadAction !== 'voucher' || unitType !== 'request')
+        return false;
+    return isSessionContentRequest(capturedRequest);
+}
+/** Applies the default HTTP content charge after a session credential has been accepted. */
+export async function applyVerifiedHttpAccounting(parameters) {
+    const { receipt, sseEnabled } = parameters;
+    if (!shouldApplyVerifiedHttpAccounting(parameters))
+        return receipt;
+    const requestAmount = parameters.getRequestAmount();
+    const charged = await parameters.charge(receipt.channelId, requestAmount);
+    const settlementTxHash = await parameters.settleCharged(charged);
+    const chargedReceipt = {
+        ...receipt,
+        spent: charged.spent.toString(),
+        units: charged.units,
+        ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
+    };
+    return sseEnabled
+        ? (parameters.markPrepaidReceipt?.(chargedReceipt) ?? chargedReceipt)
+        : chargedReceipt;
+}
+/** Atomically deducts spend from a channel and maps store failures to typed session errors. */
+export async function chargeSessionChannel(parameters) {
+    const { store, channelId, amount, idempotencyKey, retention } = parameters;
+    ChannelStore.assertIdempotencyOptions({ idempotencyKey, retention });
+    let result;
+    try {
+        result = await ChannelStore.deductFromChannel(store, channelId, amount, {
+            idempotencyKey,
+            retention,
+        });
+    }
+    catch (error) {
+        if (error instanceof ChannelStore.IdempotencyKeyConflictError)
+            throw error;
+        throw new ChannelClosedError({ reason: 'channel not found' });
+    }
+    if (!result.ok) {
+        if (result.channel.finalized)
+            throw new ChannelClosedError({ reason: 'channel is finalized' });
+        if (result.channel.closeRequestedAt !== 0n)
+            throw new ChannelClosedError({ reason: 'channel has a pending close request' });
+        const available = result.channel.highestVoucherAmount - result.channel.spent;
+        throw new InsufficientBalanceError({
+            reason: `requested ${amount}, available ${available}`,
+        });
+    }
+    return result.channel;
+}
+/** Resolves either a generic mppx store or an already-wrapped channel store. */
+export function resolveChannelStore(store) {
+    return 'getChannel' in store ? store : ChannelStore.fromStore(store);
+}
+/** Returns the account attached to a viem client, when one exists. */
+export function getClientAccount(client) {
+    return client.account;
+}
+/** Validates that the transaction sender is the channel payee or nonzero operator. */
+export function assertSettlementSender(parameters) {
+    const { operation, channelId, operator, payee, sender } = parameters;
+    if (!sender)
+        throw new Error(`Cannot ${operation} precompile channel ${channelId}: no account available. Pass an account override, or provide a getClient() that returns an account-bearing client.`);
+    if (isAddressEqual(sender, payee))
+        return;
+    if (!isAddressEqual(operator, zeroAddress) && isAddressEqual(sender, operator))
+        return;
+    throw new BadRequestError({
+        reason: `Cannot ${operation} precompile channel ${channelId}: tx sender ${sender} is not the channel payee ${payee}` +
+            (isAddressEqual(operator, zeroAddress) ? '.' : ` or operator ${operator}.`) +
+            ' If using an access key, pass a Tempo access-key account whose address is the payee/operator wallet, not the raw delegated key address.',
+    });
+}
+/** Applies automatic settlement when the server-owned schedule is due. */
+export async function maybeSettleScheduled(parameters) {
+    const { channel, schedule, store } = parameters;
+    if (!schedule || !isSettlementDue(channel, schedule))
+        return undefined;
+    const report = (error) => reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
+        chainId: channel.chainId,
+        channelId: channel.channelId,
+        error,
+        trigger: 'scheduled',
+    });
+    const leaseOwner = await claimScheduledSettlement({
+        channelId: channel.channelId,
+        schedule,
+        store,
+    }).catch(async (error) => {
+        await report(error);
+        // Nothing was submitted, so the next settlement can still collect this charge.
+        throw new SettlementLeaseError({ cause: error });
+    });
+    if (!leaseOwner)
+        return undefined;
+    const renewal = setInterval(() => {
+        void renewScheduledSettlement({
+            channelId: channel.channelId,
+            leaseOwner,
+            store,
+        }).catch(() => undefined);
+    }, scheduledSettlementLeaseMs / 2);
+    const release = () => releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(() => undefined);
+    const txHash = await settle(store, parameters.client, channel.channelId, {
+        account: parameters.account,
+        ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+        ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+        ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+        onSessionSettlement: parameters.onSessionSettlement
+            ? (ctx) => parameters.onSessionSettlement({ ...ctx, trigger: 'scheduled' })
+            : undefined,
+    })
+        .catch(async (error) => {
+        await release();
+        await report(error);
+        // The transaction confirmed and collected the charge; only the local record failed.
+        if (error instanceof SettlementCheckpointError)
+            return error.txHash;
+        throw error;
+    })
+        .finally(() => clearInterval(renewal));
+    // Bookkeeping after a confirmed settlement must not fail the charged request.
+    await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store }).catch(release);
+    return txHash;
+}
+/**
+ * Settles the largest accepted voucher within the channel's `spent` for a precompile-backed session
+ * channel (see {@link ChannelStore.resolveSettleableVoucher}). The escrow captures the voucher's
+ * whole cumulative amount, so a voucher above `spent`, such as the highest one after a credit, is
+ * never settled. Until the transaction can no longer land, credits keep `spent` at or above it.
+ */
+export async function settle(store_, client, channelId_, options) {
+    const store = resolveChannelStore(store_);
+    const channelId = ChannelStore.normalizeChannelId(channelId_);
+    const channel = await store.getChannel(channelId);
+    if (!channel)
+        throw new ChannelNotFoundError({ reason: 'channel not found' });
+    if (!ChannelStore.isPrecompileState(channel))
+        throw new VerificationFailedError({ reason: 'channel is not precompile-backed' });
+    if (!channel.highestVoucher)
+        throw new VerificationFailedError({ reason: 'no voucher to settle' });
+    const escrow = options?.escrowContract ?? channel.escrowContract;
+    const account = options?.account ?? getClientAccount(client);
+    assertSettlementSender({
+        operation: 'settle',
+        channelId,
+        operator: channel.operator,
+        payee: channel.payee,
+        sender: account?.address,
+    });
+    // Pin the transaction's expiry so the credit floor below can expire once it can no longer land.
+    const validBefore = Math.floor(Date.now() / 1000) + ChannelStore.pendingCloseValiditySeconds;
+    const pending = {
+        amount: 0n,
+        expiresAt: (validBefore + ChannelStore.pendingCloseClockSkewSeconds) * 1000,
+    };
+    const claim = {};
+    // Choosing the voucher and raising the credit floor in one update keeps a concurrent credit from
+    // lowering spent below what this transaction captures.
+    await store.updateChannel(channelId, (current) => {
+        claim.channel = current ?? undefined;
+        claim.voucher = (current && ChannelStore.resolveSettleableVoucher(current)) ?? undefined;
+        if (!current || !claim.voucher)
+            return current;
+        pending.amount = claim.voucher.cumulativeAmount;
+        const live = current.pendingSettlement && current.pendingSettlement.expiresAt > Date.now()
+            ? current.pendingSettlement
+            : undefined;
+        return {
+            ...current,
+            pendingSettlement: {
+                amount: ChannelStore.keepGreater(live?.amount ?? 0n, pending.amount),
+                expiresAt: Math.max(live?.expiresAt ?? 0, pending.expiresAt),
+            },
+        };
+    });
+    const { voucher } = claim;
+    if (!voucher || !claim.channel)
+        throw new VerificationFailedError({
+            reason: 'nothing to settle: no accepted voucher above the settled amount is within spent',
+        });
+    const claimed = claim.channel;
+    const amount = uint96(voucher.cumulativeAmount);
+    const { signature } = voucher;
+    // A revert proves the transaction will not land, so its credit floor can go at once.
+    const release = () => store
+        .updateChannel(channelId, (current) => {
+        if (current?.pendingSettlement?.amount !== pending.amount ||
+            current.pendingSettlement.expiresAt !== pending.expiresAt)
+            return current;
+        const { pendingSettlement: _, ...rest } = current;
+        return rest;
+    })
+        .catch(() => undefined);
+    let txHash;
+    let receipt;
+    try {
+        // A replica behind the open or top-up that admitted this voucher rejects the settle while
+        // preparing it (e.g. `ChannelNotFound`); nothing was broadcast, so retry until it catches up.
+        txHash = await Chain.readbackWithRetry(() => Chain.settleOnChain(client, channel.descriptor, amount, signature, escrow, account
+            ? {
+                account,
+                ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+                ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+                ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+                candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+                validBefore,
+            }
+            : { validBefore }), { shouldRetry: isExecutionRevert });
+        receipt = await Chain.waitForSuccessfulReceipt(client, txHash);
+    }
+    catch (error) {
+        if (isExecutionRevert(error) || error instanceof VerificationFailedError)
+            await release();
+        throw error;
+    }
+    const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId));
+    const { deltaPaid, newSettled } = settled;
+    if (newSettled < amount)
+        throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' });
+    // A replica behind the receipt's block would report the pre-settlement state.
+    const state = await Chain.readbackWithRetry(() => Chain.getChannelState(client, channelId, escrow, receipt.blockNumber));
+    if (state.settled !== newSettled)
+        throw new VerificationFailedError({
+            reason: 'on-chain channel state does not match settle receipt',
+        });
+    let checkpointError;
+    await store
+        .updateChannel(channelId, (current) => {
+        if (!current)
+            return current;
+        const settledOnChain = ChannelStore.keepGreater(current.settledOnChain, newSettled);
+        const { pendingSettlement, ...rest } = current;
+        return {
+            ...rest,
+            // The recorded settlement now keeps spent at or above what this transaction captured.
+            ...(pendingSettlement && pendingSettlement.amount > settledOnChain
+                ? { pendingSettlement }
+                : {}),
+            ...(current.retainedVouchers
+                ? {
+                    retainedVouchers: current.retainedVouchers.filter((retained) => retained.cumulativeAmount > settledOnChain),
+                }
+                : {}),
+            settledOnChain,
+            lastSettlementAt: new Date().toISOString(),
+            // Charges accepted after the voucher was chosen are not covered by this transaction.
+            lastSettlementSpent: ChannelStore.keepGreater(current.lastSettlementSpent ?? 0n, amount),
+            lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, claimed.units),
+        };
+    })
+        .catch((cause) => {
+        checkpointError = { cause };
+    });
+    if (options?.onSessionSettlement) {
+        await emitSessionSettlement(options.onSessionSettlement, {
+            txHash,
+            channelId,
+            trigger: 'settle',
+            amount: newSettled,
+            // The stored checkpoint can be stale after a failed write; the receipt is authoritative.
+            delta: deltaPaid,
+        });
+    }
+    if (checkpointError)
+        throw new SettlementCheckpointError({ cause: checkpointError.cause, txHash });
+    return txHash;
+}
+/** Raised when a settlement transaction confirmed but the channel store could not record it. */
+export class SettlementCheckpointError extends Error {
+    name = 'SettlementCheckpointError';
+    /** Hash of the confirmed settlement transaction. */
+    txHash;
+    constructor(options) {
+        super(`Settlement ${options.txHash} confirmed but was not recorded.`, { cause: options.cause });
+        this.txHash = options.txHash;
+    }
+}
+/** Raised when a scheduled settlement could not claim its lease; no transaction was submitted. */
+export class SettlementLeaseError extends Error {
+    name = 'SettlementLeaseError';
+    constructor(options) {
+        super('Scheduled settlement lease could not be claimed.', { cause: options.cause });
+    }
+}
+/** Settles multiple precompile-backed session channels with the same validation as {@link settle}. */
+export async function settleBatch(store, client, channelIds, options) {
+    const hashes = [];
+    for (const channelId of channelIds)
+        hashes.push(await settle(store, client, channelId, options));
+    return hashes;
+}
+/**
+ * @internal Keeps a charged request served when its scheduled settlement hit a transport or RPC
+ * failure; the next settlement retries it. Reverts and configuration errors fail the request.
+ */
+export function ignoreRetryableSettlementFailure(error) {
+    if (isRetryableSettlementFailure(error))
+        return undefined;
+    throw error;
+}
+/** Whether a settlement failed because the node's execution reverted it. */
+function isExecutionRevert(error) {
+    return (error instanceof viem_BaseError &&
+        Boolean(error.walk((cause) => cause instanceof ExecutionRevertedError)));
+}
+function isRetryableSettlementFailure(error) {
+    if (error instanceof SettlementLeaseError)
+        return true;
+    if (!(error instanceof viem_BaseError))
+        return false;
+    // Only unavailable or overloaded upstreams clear on retry; node-rejected transactions repeat.
+    return Boolean(error.walk((cause) => (cause instanceof HttpRequestError &&
+        (cause.status === undefined || cause.status === 429 || cause.status >= 500)) ||
+        // Rate limits some providers return in a JSON-RPC body rather than as HTTP 429.
+        (cause instanceof RpcRequestError && cause.code === 429) ||
+        cause instanceof InternalRpcError ||
+        cause instanceof LimitExceededRpcError ||
+        cause instanceof ResourceUnavailableRpcError ||
+        cause instanceof SocketClosedError ||
+        cause instanceof TimeoutError ||
+        // The settlement was broadcast; a later settlement collects the charge if it never lands.
+        cause instanceof WaitForTransactionReceiptTimeoutError ||
+        cause instanceof WebSocketRequestError));
+}
+/** @internal Reports a settlement failure without letting observer errors replace it. */
+export async function reportSessionSettlementFailure(onSessionSettlementFailure, context) {
+    try {
+        await onSessionSettlementFailure?.(Object.freeze(context));
+    }
+    catch {
+        // Errors are isolated: observers cannot replace the settlement failure.
+    }
+}
+async function emitSessionSettlement(onSessionSettlement, context) {
+    try {
+        await onSessionSettlement(Object.freeze(context));
+    }
+    catch {
+        // Errors are isolated — observers cannot break the settlement flow.
+    }
+}
+//# sourceMappingURL=Settlement.js.map

@@ -1,0 +1,13 @@
+// The full metadata, so a valid number is one a country has given out rather than one of the right
+// length, as the default metadata would have it.
+import { getExampleNumber, isSupportedCountry, parsePhoneNumberFromString, validatePhoneNumberLength, } from 'libphonenumber-js/max';
+import examples from 'libphonenumber-js/mobile/examples';
+const lib = {
+    getExampleNumber,
+    isSupportedCountry,
+    parsePhoneNumberFromString,
+    validatePhoneNumberLength,
+    examples,
+};
+export const phoneLib = () => lib;
+//# sourceMappingURL=phone-lib.js.map

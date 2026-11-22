@@ -1,0 +1,445 @@
+import { z } from 'zod';
+import { type FieldType, type FieldShape, type TextLeaf, type TypedSettings, type ValueOf, type WriteOf } from './structure.js';
+import { type ShapeWrite, type ShapedField } from './shapes.js';
+export { FIELD_READING, LEAVES, SHAPES, editableValue, formShows, formTextOf, heldTextOf, formWrite, heldValue, leafFromText, shaped, shapedType, textOfValue, valueFromText, type AnyLeafValue, type FieldReading, type ShapeRules, type ShapeText, type ShapeValue, type ShapeWrite, type ShapedField, type ShapedType, type ValueKind, type ValueOfKind, } from './shapes.js';
+export { FIELD_STRUCTURES, FIELD_TYPE_IDS, FIELD_TYPE_FLAGS, LIST_SOURCES, MAX_OPTIONS, MIN_OPTIONS, OPTION_SEPARATOR, TEXT_FORMATS, choice, country, editableAnswers, inOptionOrder, isCreatableType, isFieldType, isRecordValue, matchField, matchLeaf, matchShape, partsOf, text, type ChoiceLeaf, type FieldHandlers, type FieldOfShape, type FieldShape, type FieldStructure, type FieldType, type FieldTypeOfShape, type Leaf, type LeafHandlers, type LeafKind, type LeafValue, type LeafValues, type ListSource, type PartsOf, type RecordStructure, type ScalarStructure, type SetSettings, type SetStructure, type SettingsOf, type ShapeHandlers, type ShapeOf, type StructureOf, type TextLeaf, type TextFormat, type TypedSettings, type ValueOf, type WriteOf, keysOf, } from './structure.js';
+/**
+ * The shared catalog of member metafield types.
+ *
+ * ## What a field type is
+ *
+ * A publisher defines fields; a field has a type; a type says what a valid value is. That
+ * last statement lives here and nowhere else, so that Ghost core, which enforces it, and
+ * admin, which gives instant feedback against it, cannot disagree about what is valid.
+ *
+ * A type is composed of leaves, each one value with its own rule. Most types are a single
+ * leaf. An address is a *record*: a set of named parts, each a leaf, from which the whole
+ * type's rule is derived. A part is always a leaf, never a record itself.
+ *
+ * ## What a write may say
+ *
+ * A value is a leaf's value, and so is every part of one. A write names what it means to
+ * change: a name it does not mention is left as it was, and a name given `null` is being
+ * cleared, whatever kind of leaf it holds. That is why every part accepts `null` regardless of
+ * its own rule: clearing is a statement about the write, not about the part. A value is never
+ * empty, so text of nothing but spaces, or a list picking nothing, is refused rather than being
+ * a second way of holding nothing.
+ *
+ * A name nobody recognizes is an error rather than a silent drop, at both depths. A
+ * misspelled field key is refused by the values service, which alone knows which fields a
+ * site has defined; a misspelled part is refused here, because a type's parts are declared
+ * in this file and nowhere else. Each is enforced where the names are known.
+ *
+ * ## What a failure says
+ *
+ * A rule carries the sentence shown when it is broken, so the two cannot drift. Each
+ * states what is expected rather than what went wrong, so one sentence covers every way
+ * of breaking that rule.
+ *
+ * The sentences are plain literals with no interpolation, so each is usable as a
+ * translation key. The one exception is an invalid phone number, whose message includes an
+ * example number from its country. Nothing here translates: Ghost's parser reads `t()` calls out of the
+ * app that renders a string, so that app owns the step. Admin, the only one today, is not
+ * translated at all.
+ *
+ * Two failures keep zod's own wording, both reachable only by a client sending the wrong
+ * JSON shape: a composite handed something that is not an object, and a part nobody
+ * declared. Naming the offending key serves whoever has to fix that client.
+ *
+ * ## What this package will not do
+ *
+ * No presentation beyond that sentence: labels, icons and input controls belong to the
+ * frontend, and so does any wording that depends on where it appears rather than on which
+ * rule was broken. No storage: columns and codecs belong to the backend. One exception
+ * lives in `./csv` — how a value maps onto CSV columns — because both tiers need the same
+ * answer and a disagreement between them is a file that silently stops round-tripping.
+ *
+ * The line is whether more than one renderer must agree on a string, not presentation
+ * against validity — the sentences above are presentation. Admin and Portal each label a
+ * record's parts in their own words, and each is held against the catalog by a type, so a
+ * part added there fails to compile in both until it has a label.
+ */
+export declare const FieldTypeSchema: z.ZodEnum<{
+    address: "address";
+    list: "list";
+    long_text: "long_text";
+    phone: "phone";
+    short_text: "short_text";
+}>;
+/**
+ * What the member whose record it is may do with a field.
+ *
+ * A property of a definition rather than of the publisher's namespace, so it has an
+ * answer for any regime that ever stores definitions, not only the publisher's.
+ *
+ * Ordered: `write` includes being able to read. Naming the levels for a publisher is
+ * presentation and stays with whoever renders them.
+ */
+export declare const MEMBER_ACCESS_LEVELS: readonly ['none', 'read', 'write'];
+export type MemberAccess = (typeof MEMBER_ACCESS_LEVELS)[number];
+export declare const MemberAccessSchema: z.ZodEnum<{
+    none: "none";
+    read: "read";
+    write: "write";
+}>;
+export declare const MEMBER_ACCESS: {
+    readonly none: 'none';
+    readonly read: 'read';
+    readonly write: 'write';
+};
+/**
+ * Whether a field is in use. An archived field keeps its definition and the values members
+ * hold for it, so it can be restored, but it takes no new values and members no longer see it.
+ */
+export declare const FIELD_STATUSES: readonly ['active', 'archived'];
+export type FieldStatus = (typeof FIELD_STATUSES)[number];
+export declare const FieldStatusSchema: z.ZodEnum<{
+    active: "active";
+    archived: "archived";
+}>;
+export declare const FIELD_STATUS: {
+    readonly active: 'active';
+    readonly archived: 'archived';
+};
+/**
+ * A set field's settings as stored or sent back: their shape alone, which every read checks. A
+ * write checks the rules `SetSettingsSchema` layers on top, so a rule tightened later never hides
+ * a field set up under the old one, the way a value's rule never hides what a member already holds.
+ */
+export declare const SetSettingsShape: z.ZodObject<{
+    options: z.ZodArray<z.ZodString>;
+    multiple: z.ZodBoolean;
+}, z.core.$strip>;
+/**
+ * What a set field is set up with: its shape, with each option's text tidied and the rules a write
+ * must meet on top. Options are a set as well, so the same option, compared by `optionKey`, can't
+ * be offered twice: the option that repeats an earlier one is refused, so a form shows the problem
+ * beside the option to change. They are listed in the order they are shown.
+ */
+export declare const SetSettingsSchema: z.ZodPipe<z.ZodObject<{
+    options: z.ZodArray<z.ZodString>;
+    multiple: z.ZodBoolean;
+}, z.core.$strip>, z.ZodTransform<{
+    options: string[];
+    multiple: boolean;
+}, {
+    options: string[];
+    multiple: boolean;
+}>>;
+/**
+ * What a field holds beside its type, `base`, with its type and the settings that type's shape
+ * takes, held as `settings` says for each shape: a set's options, and nothing for any other shape.
+ * One variant per shape, so a field's settings are always read against its type. Writes give the
+ * rules, reads the shape alone, and Ghost's table its column.
+ */
+export declare const withTypedSettings: <Base extends z.ZodRawShape, ForScalar extends z.ZodType, ForRecord extends z.ZodType, ForSet extends z.ZodType>(base: Base, settings: {
+    scalar: ForScalar;
+    record: ForRecord;
+    set: ForSet;
+} & { [S in FieldShape]: z.ZodType; }) => z.ZodDiscriminatedUnion<[z.ZodObject<Base & {
+    type: z.ZodEnum<{
+        long_text: "long_text";
+        phone: "phone";
+        short_text: "short_text";
+    }>;
+    settings: ForScalar & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+} extends infer T ? { -readonly [P in keyof T]: T[P]; } : never, z.core.$strip>, z.ZodObject<Base & {
+    type: z.ZodEnum<{
+        address: "address";
+    }>;
+    settings: ForRecord & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+} extends infer T_1 ? { -readonly [P in keyof T_1]: T_1[P]; } : never, z.core.$strip>, z.ZodObject<Base & {
+    type: z.ZodEnum<{
+        list: "list";
+    }>;
+    settings: ForSet & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+} extends infer T_2 ? { -readonly [P in keyof T_2]: T_2[P]; } : never, z.core.$strip>], "type">;
+/**
+ * Each shape's settings in one place: a set's options and whether a member picks several, and
+ * nothing for any other shape. A list's defaults have no options, which a list's write rules
+ * refuse, so an edit of a list read with its defaults always writes the settings it is given.
+ * Keyed by shape, so a shape added to the catalog fails to compile until it has an entry.
+ */
+export declare const SHAPE_SETTINGS: {
+    scalar: {
+        written: z.ZodOptional<z.ZodUndefined>;
+        read: z.ZodOptional<z.ZodUndefined>;
+        defaults: undefined;
+    };
+    record: {
+        written: z.ZodOptional<z.ZodUndefined>;
+        read: z.ZodOptional<z.ZodUndefined>;
+        defaults: undefined;
+    };
+    set: {
+        written: z.ZodPipe<z.ZodObject<{
+            options: z.ZodArray<z.ZodString>;
+            multiple: z.ZodBoolean;
+        }, z.core.$strip>, z.ZodTransform<{
+            options: string[];
+            multiple: boolean;
+        }, {
+            options: string[];
+            multiple: boolean;
+        }>>;
+        read: z.ZodObject<{
+            options: z.ZodArray<z.ZodString>;
+            multiple: z.ZodBoolean;
+        }, z.core.$strip>;
+        defaults: {
+            options: never[];
+            multiple: false;
+        };
+    };
+};
+/** Each shape's settings as a write states them, checked against the rules. */
+export declare const WRITTEN_SETTINGS: {
+    scalar: z.ZodOptional<z.ZodUndefined>;
+    record: z.ZodOptional<z.ZodUndefined>;
+    set: z.ZodPipe<z.ZodObject<{
+        options: z.ZodArray<z.ZodString>;
+        multiple: z.ZodBoolean;
+    }, z.core.$strip>, z.ZodTransform<{
+        options: string[];
+        multiple: boolean;
+    }, {
+        options: string[];
+        multiple: boolean;
+    }>>;
+};
+/** Each shape's settings as they are read back, checked for their shape alone. */
+export declare const READ_SETTINGS: {
+    scalar: z.ZodOptional<z.ZodUndefined>;
+    record: z.ZodOptional<z.ZodUndefined>;
+    set: z.ZodObject<{
+        options: z.ZodArray<z.ZodString>;
+        multiple: z.ZodBoolean;
+    }, z.core.$strip>;
+};
+/**
+ * Where a refusal points within what was sent: the path to the refused value, with its parts and
+ * positions joined by dots, such as `settings.options.2` for a field's third option. Ghost names
+ * a refusal's `property` this way, and a form files the problems it finds under the same keys, so
+ * each lands beside the input that set the value.
+ */
+export declare function refusedProperty(path: readonly PropertyKey[]): string;
+/**
+ * A field's type and settings as a write states them, checked together and against the rules:
+ * the settings must be what that type is set up with, so a list carries its options and
+ * nothing else carries any.
+ */
+export declare const TypedSettingsInputSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+    type: z.ZodEnum<{
+        long_text: "long_text";
+        phone: "phone";
+        short_text: "short_text";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        address: "address";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        list: "list";
+    }>;
+    settings: z.ZodPipe<z.ZodObject<{
+        options: z.ZodArray<z.ZodString>;
+        multiple: z.ZodBoolean;
+    }, z.core.$strip>, z.ZodTransform<{
+        options: string[];
+        multiple: boolean;
+    }, {
+        options: string[];
+        multiple: boolean;
+    }>> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>], "type">;
+/** A field's type and settings as they are read back: paired, but checked for their shape alone. */
+export declare const TypedSettingsSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+    type: z.ZodEnum<{
+        long_text: "long_text";
+        phone: "phone";
+        short_text: "short_text";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        address: "address";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        list: "list";
+    }>;
+    settings: z.ZodObject<{
+        options: z.ZodArray<z.ZodString>;
+        multiple: z.ZodBoolean;
+    }, z.core.$strip> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+}, z.core.$strip>], "type">;
+/**
+ * A field definition as the Admin and Members APIs return it. Ghost writes every definition through
+ * this and Admin reads every one through it, so both ends are checked against one shape. Portal
+ * uses the type without the check, because zod would add to every page view on every site. Dates
+ * are ISO strings, as JSON carries them.
+ */
+export declare const MetafieldDefinitionSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+    type: z.ZodEnum<{
+        long_text: "long_text";
+        phone: "phone";
+        short_text: "short_text";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+    namespace: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Namespace", "out">;
+    key: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Key", "out">;
+    name: z.ZodString;
+    status: z.ZodEnum<{
+        active: "active";
+        archived: "archived";
+    }>;
+    access: z.ZodObject<{
+        member: z.ZodEnum<{
+            none: "none";
+            read: "read";
+            write: "write";
+        }>;
+    }, z.core.$strip>;
+    created_at: z.ZodISODateTime;
+    updated_at: z.ZodNullable<z.ZodISODateTime>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        address: "address";
+    }>;
+    settings: z.ZodOptional<z.ZodUndefined> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+    namespace: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Namespace", "out">;
+    key: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Key", "out">;
+    name: z.ZodString;
+    status: z.ZodEnum<{
+        active: "active";
+        archived: "archived";
+    }>;
+    access: z.ZodObject<{
+        member: z.ZodEnum<{
+            none: "none";
+            read: "read";
+            write: "write";
+        }>;
+    }, z.core.$strip>;
+    created_at: z.ZodISODateTime;
+    updated_at: z.ZodNullable<z.ZodISODateTime>;
+}, z.core.$strip>, z.ZodObject<{
+    type: z.ZodEnum<{
+        list: "list";
+    }>;
+    settings: z.ZodObject<{
+        options: z.ZodArray<z.ZodString>;
+        multiple: z.ZodBoolean;
+    }, z.core.$strip> & z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>;
+    namespace: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Namespace", "out">;
+    key: z.core.$ZodBranded<import("zod/mini").ZodMiniString<string>, "Key", "out">;
+    name: z.ZodString;
+    status: z.ZodEnum<{
+        active: "active";
+        archived: "archived";
+    }>;
+    access: z.ZodObject<{
+        member: z.ZodEnum<{
+            none: "none";
+            read: "read";
+            write: "write";
+        }>;
+    }, z.core.$strip>;
+    created_at: z.ZodISODateTime;
+    updated_at: z.ZodNullable<z.ZodISODateTime>;
+}, z.core.$strip>], "type">;
+export type MetafieldDefinition = z.output<typeof MetafieldDefinitionSchema>;
+/**
+ * Where a change to a member's values was made, as a member's activity feed names it.
+ * Shared so a place added on the server is one Admin has to be told how to describe.
+ */
+export declare const METAFIELD_CHANGE_SOURCES: readonly ['admin', 'admin_api', 'portal', 'import', 'checkout'];
+export type MetafieldChangeSource = (typeof METAFIELD_CHANGE_SOURCES)[number];
+/** Whether a source is one this build knows how to name; a newer server can send others. */
+export declare const isMetafieldChangeSource: (source: string) => source is MetafieldChangeSource;
+/** A field as an activity feed entry names it: its name is copied so the entry outlives a rename. */
+export declare const MetafieldChangeEventFieldSchema: z.ZodObject<{
+    namespace: z.ZodString;
+    key: z.ZodString;
+    name: z.ZodString;
+}, z.core.$strip>;
+export type MetafieldChangeEventField = z.infer<typeof MetafieldChangeEventFieldSchema>;
+/**
+ * An entry on a member's activity feed saying which fields a write changed, as the members
+ * events endpoint returns it. The server builds it and Admin reads it, so both are held to
+ * this one shape. `created_at` is a date on the server and its serialised string in a
+ * client. `source` stays open to places a newer server adds.
+ */
+export interface MetafieldChangeEntry<TDate = string> {
+    id: string;
+    member_id: string;
+    written_by_type: string;
+    written_by_id: string | null;
+    source: MetafieldChangeSource | (string & {});
+    metafields: MetafieldChangeEventField[];
+    created_at: TDate;
+}
+/**
+ * Bytes, not characters, because MySQL TEXT holds 65,535 of them: a character bound would
+ * accept a multibyte value the column cannot hold, and 65,535 emoji is four times over.
+ */
+export declare const MAX_LONG_TEXT_BYTES = 65535;
+/**
+ * A phone number in E.164, read as it is dialled in `country` unless it was written with a country
+ * code of its own, or undefined when it isn't a number a phone field could keep. For a number that
+ * comes with a country rather than a code, such as one Apple Pay or Google Pay passes on beside the
+ * country of the buyer's card. Without a country a phone can belong to, only a number written with
+ * its code is read.
+ */
+export declare function phoneNumberIn(text: string, country: string | undefined): string | undefined;
+/**
+ * What a filter on a text leaf looks for, given what was typed and the country of whoever typed it:
+ * the text as the leaf's field holds it, so a phone field's filter finds `+442079460000` from
+ * `020 7946 0000` typed in the United Kingdom.
+ */
+export declare function filterTextFor(leaf: TextLeaf, typed: string, country: string | undefined): string;
+/**
+ * A value of any field type, as a caller holding a field of unknown type must accept it.
+ */
+export type FieldValue = ValueOf<FieldType>;
+/** A write to a field of any type, as a caller holding a field of unknown type must give it. */
+export type FieldWrite = WriteOf<FieldType>;
+export type Address = ValueOf<'address'>;
+/**
+ * A value a field's rule accepted for writing, tidied as the rule tidies it. Only `accept` makes
+ * one, so a value that skipped the rule can't be handed to code that stores it.
+ */
+export type Accepted<S extends FieldShape> = ShapeWrite[S] & z.core.$brand<'accepted'>;
+/** An accepted value with its shape, so a table keyed by shape can be indexed with it. */
+export type AcceptedValue<S extends FieldShape = FieldShape> = {
+    [K in S]: {
+        readonly shape: K;
+        readonly value: Accepted<K>;
+    };
+}[S];
+export type Acceptance<S extends FieldShape = FieldShape> = {
+    readonly success: true;
+    readonly accepted: AcceptedValue<S>;
+} | {
+    readonly success: false;
+    readonly issues: readonly z.core.$ZodIssue[];
+};
+/**
+ * Strict, for a write, under the field's rule today: only options the field offers now, one answer
+ * when it takes one, and each part valid under its leaf's rule. What a held value reads as is
+ * lenient instead, and is `FIELD_READING`'s to say.
+ */
+export declare function accept<S extends FieldShape>(of: ShapedField<TypedSettings, S>, raw: unknown): Acceptance<S>;
+/**
+ * The rule a write to one field must satisfy, which parses to the write it accepts: a record's
+ * part named as `null` clears it. It takes the field rather than its type so that a
+ * rule depending on the field's own setup, such as the options a list field offers, changes here
+ * and nowhere else; such a rule is built from the field rather than kept per type. Throws for a
+ * type this build doesn't know.
+ */
+export declare function valueSchemaFor(field: TypedSettings): z.ZodType<FieldWrite>;
+//# sourceMappingURL=index.d.ts.map

@@ -1,0 +1,55 @@
+/**
+ * Refuses a Tempo proof or session payment whose realm the HTTP server that sent the Challenge does not
+ * own. A proof authenticates the payer at the Challenge realm, so a foreign origin could otherwise
+ * relay another server's Challenge and replay the signed proof there. The server owns the realm
+ * when it is the request hostname, or when `trustedRealms` pins it to the request origin. Pass
+ * `url` as a function to resolve it only for proof Challenges.
+ */
+export function assert(challenge, url, trustedRealms) {
+    if (!isProof(challenge) && !(challenge.method === 'tempo' && challenge.intent === 'session'))
+        return;
+    url = typeof url === 'function' ? url() : url;
+    const { realm } = challenge;
+    if (realm.toLowerCase() === url.hostname.toLowerCase())
+        return;
+    const origin = url.origin.toLowerCase();
+    for (const [trustedOrigin, trustedRealm] of Object.entries(trustedRealms ?? {}))
+        if (trustedRealm === realm && normalizeOrigin(trustedOrigin) === origin)
+            return;
+    throw new Error(`Refusing to sign Tempo proof for realm ${JSON.stringify(realm)} from ${url.origin}. Pin the realm to this origin with \`trustedTempoProofRealms\` if this server is expected to issue it.`);
+}
+/**
+ * Refuses a Tempo proof or session payment on a transport without an origin, such as MCP, unless
+ * `trustedRealms` lists its realm.
+ */
+export function assertWithoutOrigin(challenge, trustedRealms) {
+    if (!isProof(challenge) && !(challenge.method === 'tempo' && challenge.intent === 'session'))
+        return;
+    if (trustedRealms?.includes(challenge.realm))
+        return;
+    throw new Error(`Refusing to sign Tempo proof for untrusted realm ${JSON.stringify(challenge.realm)}. Add it to \`trustedTempoProofRealms\` if this server is expected to issue it.`);
+}
+/**
+ * Whether `challenge` is a zero-amount `tempo/charge` Challenge, paid with a signed proof. Uses the
+ * same `BigInt` conversion as the Tempo charge client, so every encoding it signs a proof for
+ * (such as `"0x0"` or `" 0 "`) is checked.
+ */
+function isProof(challenge) {
+    if (challenge.method !== 'tempo' || challenge.intent !== 'charge')
+        return false;
+    try {
+        return BigInt(challenge.request.amount) === 0n;
+    }
+    catch {
+        return false;
+    }
+}
+function normalizeOrigin(origin) {
+    try {
+        return new URL(origin).origin.toLowerCase();
+    }
+    catch {
+        return origin.toLowerCase();
+    }
+}
+//# sourceMappingURL=ProofRealm.js.map

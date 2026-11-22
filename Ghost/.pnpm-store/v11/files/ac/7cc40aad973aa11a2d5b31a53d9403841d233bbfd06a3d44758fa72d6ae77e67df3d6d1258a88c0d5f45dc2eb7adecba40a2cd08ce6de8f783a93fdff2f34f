@@ -1,0 +1,10 @@
+import type { z } from 'zod';
+/** The only algorithm either key signs with. */
+export declare const ALGORITHM = "Ed25519";
+/**
+ * Reads a JWS protected header that must be exactly `shape`, which is a strict object. Any
+ * other member could change what the signature covers, as `b64: false` does, or name
+ * another key, so the header is checked before the signature and again when verifying.
+ */
+export declare function readExactHeader<T>(encoded: string, shape: z.ZodType<T>): T | undefined;
+//# sourceMappingURL=jws.d.ts.map

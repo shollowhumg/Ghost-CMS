@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`a2f8680a-45a7-47d9-b4ca-8a6e05cfddd5`,e._sentryDebugIdIdentifier=`sentry-dbid-a2f8680a-45a7-47d9-b4ca-8a6e05cfddd5`)}catch{}})();import{s as e}from"./config-BD6zcwpF.js";var t=(t={})=>{let{data:n}=e({refetchOnMount:!1,requestOptions:t.requestOptions});return n?.config.hostSettings?.limits};export{t};
+//# debugId=a2f8680a-45a7-47d9-b4ca-8a6e05cfddd5

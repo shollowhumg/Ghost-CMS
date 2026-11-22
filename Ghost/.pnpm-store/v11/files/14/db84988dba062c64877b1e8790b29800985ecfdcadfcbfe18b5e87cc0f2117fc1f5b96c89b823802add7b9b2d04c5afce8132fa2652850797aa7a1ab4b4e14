@@ -1,0 +1,8 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.safe = safe;
+const string_1 = require("@tryghost/string");
+/** Normalizes slugs, treating null or omitted values as an empty string. */
+function safe(string, options = {}) {
+    return (0, string_1.slugify)(string, { requiredChangesOnly: options.importing === true });
+}

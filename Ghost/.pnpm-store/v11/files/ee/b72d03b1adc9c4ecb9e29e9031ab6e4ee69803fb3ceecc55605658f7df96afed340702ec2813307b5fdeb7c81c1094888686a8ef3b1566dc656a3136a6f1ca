@@ -1,0 +1,49 @@
+# @tryghost/kg-default-cards
+
+## 10.3.11
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated TryGhost SDK dependencies
+
+## 10.3.10
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 10.3.9
+
+### Patch Changes
+
+- Stopped publishing the TypeScript incremental build cache (build/tsconfig.tsbuildinfo) in the npm package
+
+- Bumped TryGhost SDK dependencies to their latest versions
+
+## 10.3.8
+
+### Patch Changes
+
+- Updated handlebars to 4.7.10 to pick up its security fixes
+
+- Updated dependencies
+
+## 10.3.7
+
+### Patch Changes
+
+- Updated @tryghost/url-utils to 5.4.0
+
+## 10.3.6
+
+### Patch Changes
+
+- Updated @tryghost/url-utils to 5.2.9
+
+- Updated juice to 11.1.1
+
+- Updated @tryghost/url-utils to 5.3.0 so URLs containing HTML entities are transformed

@@ -1,0 +1,8 @@
+import type { MethodSchemas } from './define-method.ts';
+import type Frame from './frame.ts';
+/** Parses request channels before any schema-aware callback or cache lookup. */
+export default function parseRequest(schemas: MethodSchemas, frame: Frame): Promise<{
+    options?: unknown;
+    body?: unknown;
+}>;
+//# sourceMappingURL=parse-request.d.ts.map

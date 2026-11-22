@@ -1,0 +1,22 @@
+import type { AppManifest } from './schema.ts';
+export interface ManifestChange {
+    /** Where in the manifest the change is, e.g. `surfaces[0].url`. */
+    path: string;
+    /** Whether this change needs the publisher to approve it before it applies. */
+    requiresApproval: boolean;
+}
+export interface ManifestComparison {
+    /** Every field that differs, in a stable order. Empty when nothing changed. */
+    changes: ManifestChange[];
+    /** Whether any of the changes needs approval. */
+    requiresApproval: boolean;
+}
+/**
+ * Compares the manifest a publisher approved with a newer one, field by field. A field
+ * that appears or disappears counts as changed.
+ *
+ * The manifest names its own `manifest_url`, which decides what future updates say, so a
+ * move needs approval like any other change of URL.
+ */
+export declare function compareManifests(approved: AppManifest, next: AppManifest): ManifestComparison;
+//# sourceMappingURL=compare.d.ts.map

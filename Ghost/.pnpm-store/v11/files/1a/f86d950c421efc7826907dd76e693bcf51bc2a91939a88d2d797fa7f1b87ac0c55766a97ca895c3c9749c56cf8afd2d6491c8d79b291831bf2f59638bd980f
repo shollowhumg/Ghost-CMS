@@ -1,0 +1,23 @@
+import { type SessionReceipt } from '../../tempo/session/precompile/Protocol.js';
+import type { CheckResult, EndpointSpec } from './helpers.js';
+export declare function validatePaymentFlow(baseUrl: string, endpoint: EndpointSpec, verbose: boolean, options: {
+    body?: string | undefined;
+    query?: string[] | undefined;
+    extraHeaders?: string[] | undefined;
+    yes?: boolean | undefined;
+    silent?: boolean | undefined;
+    interactive?: boolean | undefined;
+    onResults?: (results: CheckResult[]) => void;
+}): Promise<CheckResult[]>;
+/**
+ * Wraps a fetch so in-stream session receipts are seen as the session client reads them: the
+ * client consumes `payment-receipt` events before the caller sees the body. Event-stream
+ * responses without a `Payment-Receipt` header pass through a scanner that keeps only the
+ * current partial event, so nothing is buffered or left unread.
+ */
+/** @internal */
+export declare function captureEventStream(fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): {
+    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+    receipt: () => SessionReceipt | null | undefined;
+};
+//# sourceMappingURL=payment.d.ts.map

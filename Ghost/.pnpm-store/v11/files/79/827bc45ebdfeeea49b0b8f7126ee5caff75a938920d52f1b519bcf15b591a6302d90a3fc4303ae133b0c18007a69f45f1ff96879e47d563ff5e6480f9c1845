@@ -1,0 +1,40 @@
+{
+  "name": "@tryghost/security",
+  "version": "4.0.4",
+  "description": "Security primitives for token generation, password hashing, and safe identifiers",
+  "license": "MIT",
+  "author": "Ghost Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/framework.git",
+    "directory": "packages/security"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib/*.js",
+    "lib/*.d.ts"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@tryghost/string": "^0.3.5",
+    "bcryptjs": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  },
+  "scripts": {
+    "dev": "tsc --watch --preserveWatchOutput",
+    "build": "tsc",
+    "pretest": "pnpm run build",
+    "test": "pnpm run test:types && NODE_ENV=testing vitest run --coverage",
+    "test:types": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "oxlint -c ../../.oxlintrc.json .",
+    "posttest": "pnpm run lint"
+  }
+}

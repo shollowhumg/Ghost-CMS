@@ -1,0 +1,3 @@
+/** Logs `message` with `console.warn` the first time `key` is seen in this process. */
+export declare function warnOnce(key: string, message: string): void;
+//# sourceMappingURL=warnOnce.d.ts.map

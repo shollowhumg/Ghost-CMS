@@ -1,0 +1,66 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AutomationsImporter = void 0;
+const faker_1 = require("@faker-js/faker");
+const string_1 = require("@tryghost/string");
+const table_importer_1 = require("./table-importer");
+const blog_info_1 = require("../utils/blog-info");
+const date_1 = require("../../../lib/db-types/date");
+const constants_1 = require("../../../services/member-welcome-emails/constants");
+const defaultAutomations = [
+    {
+        name: 'Free member welcome flow',
+        slug: constants_1.MEMBER_WELCOME_EMAIL_SLUGS.free,
+        description: 'Welcome new free members after they sign up.',
+    },
+    {
+        name: 'Paid member welcome flow',
+        slug: constants_1.MEMBER_WELCOME_EMAIL_SLUGS.paid,
+        description: 'Welcome new paid members after they start their subscription.',
+    },
+];
+class AutomationsImporter extends table_importer_1.TableImporter {
+    static table = 'automations';
+    static dependencies = [];
+    #generated = 0;
+    defaultQuantity = 2;
+    constructor(knex, transaction) {
+        super(AutomationsImporter.table, knex, transaction);
+    }
+    async batchInsert(data) {
+        await super.batchInsert(data);
+        const rules = data.map((automation) => {
+            const isFreeSignup = automation.slug === constants_1.MEMBER_WELCOME_EMAIL_SLUGS.free;
+            return {
+                id: this.fastFakeObjectId(),
+                automation_id: automation.id,
+                trigger_type: isFreeSignup ? 'free_signup' : 'paid_subscription_started',
+                scope: isFreeSignup ? null : 'any_paid_tier',
+                product_id: null,
+                created_at: automation.created_at,
+            };
+        });
+        if (rules.length > 0) {
+            await this.knex.batchInsert('automation_trigger_rules', rules).transacting(this.transaction);
+        }
+    }
+    generate() {
+        const id = this.fastFakeObjectId();
+        const defaultAutomation = defaultAutomations[this.#generated];
+        const randomName = `${faker_1.faker.word.adjective()} ${faker_1.faker.word.noun()} flow`;
+        const name = defaultAutomation?.name ?? `${randomName} ${id}`;
+        const slug = defaultAutomation?.slug ?? `${(0, string_1.slugify)(randomName)}-${id}`;
+        const createdAt = faker_1.faker.date.between({ from: blog_info_1.blogStartDate, to: new Date() });
+        this.#generated += 1;
+        return {
+            id,
+            status: faker_1.faker.helpers.arrayElement(['active', 'inactive']),
+            name,
+            description: defaultAutomation?.description ?? '',
+            slug,
+            created_at: (0, date_1.toDatabaseDate)(createdAt),
+            updated_at: (0, date_1.toDatabaseDate)(createdAt),
+        };
+    }
+}
+exports.AutomationsImporter = AutomationsImporter;

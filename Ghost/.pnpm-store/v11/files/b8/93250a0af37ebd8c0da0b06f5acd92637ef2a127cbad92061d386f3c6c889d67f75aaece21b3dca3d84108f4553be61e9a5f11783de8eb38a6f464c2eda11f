@@ -1,0 +1,94 @@
+import type { Hex } from 'viem';
+import type { NeedVoucherEvent } from '../precompile/Protocol.js';
+import * as ChannelStore from './ChannelStore.js';
+/** Parameters for reserving voucher headroom before emitting a stream item. */
+export type ReserveChargeParameters = {
+    /** Amount required for the next stream item. */
+    amount: bigint;
+    /** Channel being metered. */
+    channelId: Hex;
+    /** Emits the transport-specific need-voucher frame. */
+    emit: (message: string) => void | Promise<void>;
+    /** Formats a transport-specific need-voucher frame. */
+    formatNeedVoucher(parameters: NeedVoucherEvent): string;
+    /** Store polling interval when `waitForUpdate` is unavailable. */
+    pollIntervalMs: number;
+    /** Identifier owned by this stream across reserve, commit, and release. */
+    reservationId: string;
+    /** Requires a previous uncommitted charge to retain its lease. */
+    requireExisting?: boolean | undefined;
+    /** Optional abort signal for long waits. */
+    signal?: AbortSignal | undefined;
+    /** Channel store used for state reads and waits. */
+    store: ChannelStore.ChannelStore;
+};
+/** Inputs for updating the reservation owned by one stream. */
+export type CommitReservedChargesParameters = {
+    channelId: Hex;
+    reservationId: string;
+    store: ChannelStore.ChannelStore;
+};
+/** Lease duration for abandoned stream reservations. Active generators renew it. */
+export declare const streamReservationLeaseMs = 30000;
+/** Atomically reserves shared voucher coverage before billable stream work begins. */
+export declare function reserveChargeOrWait(options: ReserveChargeParameters): Promise<void>;
+/** Commits only this stream's live reservation, removing it in the same atomic update. */
+export declare function commitReservedCharges(options: CommitReservedChargesParameters): Promise<ChannelStore.State | undefined>;
+/** Releases only the unused reservation owned by this stream. */
+export declare function releaseReservedCharges({ store, channelId, reservationId, }: CommitReservedChargesParameters): Promise<void>;
+/** Renews a live reservation without reviving an expired or released lease. */
+export declare function renewReservedCharges({ store, channelId, reservationId, }: CommitReservedChargesParameters): Promise<void>;
+/** Throws when a channel can no longer be used for streaming charges. */
+export declare function throwIfChannelClosed(channel: ChannelStore.State): void;
+/** Minimal socket event map supported by browser and Node-style WebSocket runtimes. */
+export type SocketEventMap = {
+    close: Event | {
+        code?: number | undefined;
+        reason?: string | undefined;
+        type?: string;
+    };
+    error: Event | {
+        type?: string;
+    };
+    message: Event | {
+        data: unknown;
+        type?: string;
+    };
+};
+/** Socket event listener accepted by browser and Node-style runtimes. */
+export type SocketEventListener<type extends keyof SocketEventMap> = ((event: SocketEventMap[type]) => void) | {
+    handleEvent(event: SocketEventMap[type]): void;
+};
+/** Minimal socket shape required by the session WebSocket adapter. */
+export type Socket = {
+    /** Bytes queued by the runtime but not yet written to the network. */
+    readonly bufferedAmount?: number | undefined;
+    close(code?: number, reason?: string): unknown;
+    send(data: string): unknown;
+    addEventListener?: <type extends keyof SocketEventMap>(type: type, listener: SocketEventListener<type>) => unknown;
+    removeEventListener?: <type extends keyof SocketEventMap>(type: type, listener: SocketEventListener<type>) => unknown;
+    on?: <type extends keyof SocketEventMap>(type: type, listener: (event: SocketEventMap[type]) => void) => unknown;
+    off?: <type extends keyof SocketEventMap>(type: type, listener: (event: SocketEventMap[type]) => void) => unknown;
+};
+/** Raised after a socket is closed to keep its outbound queue bounded. */
+export declare class WebSocketOutboundBufferLimitError extends Error {
+    readonly name = "WebSocketOutboundBufferLimitError";
+}
+/** Handlers for socket lifecycle and message events. */
+export type SocketHandlers = {
+    /** Called when the socket closes. */
+    close(): void;
+    /** Called when the socket reports an error. */
+    error(): void;
+    /** Called with raw message payloads. */
+    message(payload: unknown): void;
+};
+/** Subscribes to browser or Node-style socket events and returns an unsubscribe callback. */
+export declare function subscribe(socket: Socket, handlers: SocketHandlers): () => void;
+/** Sends a text frame while bounding runtime-managed outbound buffering. */
+export declare function send(socket: Socket, data: string, options?: {
+    maxBufferedAmount?: number;
+}): Promise<void>;
+/** Converts socket message payloads into text frames when possible. */
+export declare function toText(value: unknown): string | null;
+//# sourceMappingURL=Transports.d.ts.map

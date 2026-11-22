@@ -1,0 +1,48 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.tcpPort = void 0;
+exports.httpUrl = httpUrl;
+exports.knownKeys = knownKeys;
+const zod_1 = require("zod");
+/**
+ * An absolute `http://` or `https://` URL. Parsed with `new URL()`, as Ghost's
+ * own URL helpers do, so anything this rejects they would already throw on.
+ */
+function httpUrl(params = {}) {
+    return zod_1.z.url({
+        protocol: /^https?$/,
+        error: 'Must be a full URL starting with http:// or https://',
+        ...(typeof params === 'string' ? { error: params } : params),
+    });
+}
+/**
+ * A closed object that reports keys it does not name, then strips them.
+ *
+ * Under test an unknown key is this repo's mistake, so it fails the parse with
+ * zod's own `unrecognized_keys` issue, as `z.strictObject` would. Elsewhere it
+ * only warns, even in strict mode: a strict object would make every new key a
+ * breaking change for configs written against an older Ghost. The environment
+ * is read at parse time, as the loader reads it. `name` labels the warning; a
+ * transform cannot see its own path.
+ */
+function knownKeys(name, shape) {
+    const isKnown = (key) => Object.hasOwn(shape, key);
+    return zod_1.z.looseObject(shape).transform((value, ctx) => {
+        const unknown = Object.keys(value).filter((key) => !isKnown(key));
+        if (unknown.length && process.env.NODE_ENV?.startsWith('test')) {
+            ctx.issues.push({ code: 'unrecognized_keys', keys: unknown, input: value });
+        }
+        else if (unknown.length) {
+            // eslint-disable-next-line no-console
+            console.warn(`Ghost config has unknown keys, which are ignored:\n${unknown.map((key) => `  ${name}:${key}`).join('\n')}`);
+        }
+        return Object.fromEntries(Object.entries(value).filter(([key]) => isKnown(key)));
+    });
+}
+/**
+ * A TCP port. A quoted port is coerced, as drivers accept one anyway. Digits
+ * only, as `z.coerce` would take `true` as 1.
+ */
+exports.tcpPort = zod_1.z
+    .union([zod_1.z.number(), zod_1.z.string().regex(/^\d+$/).transform(Number)])
+    .pipe(zod_1.z.number().int().min(1).max(65535));

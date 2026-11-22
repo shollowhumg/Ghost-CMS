@@ -1,0 +1,77 @@
+import { z } from 'zod';
+import { type UrlRules } from './url.ts';
+/** The manifest as an app serves it. Built per parse, as its URL rule depends on the parse. */
+export declare function manifestSchema(rules: UrlRules): z.ZodObject<{
+    id: z.ZodCustom<string, string>;
+    name: z.ZodString;
+    description: z.ZodString;
+    author: z.ZodObject<{
+        name: z.ZodString;
+        url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    }, z.core.$strict>;
+    accent_color: z.ZodString;
+    icon: z.ZodPipe<z.ZodObject<{
+        name: z.ZodOptional<z.ZodString>;
+        url: z.ZodOptional<z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>>;
+    }, z.core.$strict>, z.ZodCustom<import("./icon.ts").AppIcon, import("./icon.ts").AppIcon>>;
+    surfaces: z.ZodArray<z.ZodDiscriminatedUnion<readonly [z.ZodObject<{
+        type: z.ZodLiteral<"admin_page">;
+        url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    }, z.core.$strict>], "type">>;
+    manifest_url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    identity_key: z.ZodObject<{
+        kty: z.ZodLiteral<"OKP">;
+        crv: z.ZodLiteral<"Ed25519">;
+        x: z.ZodString;
+    }, z.core.$strict>;
+    backend_key: z.ZodObject<{
+        kty: z.ZodLiteral<"OKP">;
+        crv: z.ZodLiteral<"Ed25519">;
+        x: z.ZodString;
+    }, z.core.$strict>;
+    development: z.ZodBoolean;
+}, z.core.$strict>;
+/**
+ * The manifest as `parseManifest` hands it back: every URL absolute, and nothing left to
+ * resolve or check. This is the schema to read a stored manifest with, as it holds
+ * whatever the site's URL has become since, and it encodes a manifest back to the same
+ * shape, so what is stored is what will be read.
+ */
+export declare const AppManifestSchema: z.ZodObject<{
+    id: z.ZodCustom<string, string>;
+    name: z.ZodString;
+    description: z.ZodString;
+    author: z.ZodObject<{
+        name: z.ZodString;
+        url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    }, z.core.$strict>;
+    accent_color: z.ZodString;
+    icon: z.ZodPipe<z.ZodObject<{
+        name: z.ZodOptional<z.ZodString>;
+        url: z.ZodOptional<z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>>;
+    }, z.core.$strict>, z.ZodCustom<import("./icon.ts").AppIcon, import("./icon.ts").AppIcon>>;
+    surfaces: z.ZodArray<z.ZodDiscriminatedUnion<readonly [z.ZodObject<{
+        type: z.ZodLiteral<"admin_page">;
+        url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    }, z.core.$strict>], "type">>;
+    manifest_url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    identity_key: z.ZodObject<{
+        kty: z.ZodLiteral<"OKP">;
+        crv: z.ZodLiteral<"Ed25519">;
+        x: z.ZodString;
+    }, z.core.$strict>;
+    backend_key: z.ZodObject<{
+        kty: z.ZodLiteral<"OKP">;
+        crv: z.ZodLiteral<"Ed25519">;
+        x: z.ZodString;
+    }, z.core.$strict>;
+    development: z.ZodBoolean;
+}, z.core.$strict>;
+/**
+ * A parsed manifest. Every URL in it is absolute, and a surface's origin is the only one
+ * allowed to talk to Ghost from that surface.
+ */
+export type AppManifest = z.output<typeof AppManifestSchema>;
+export type AppSurface = AppManifest['surfaces'][number];
+export type AppSurfaceType = AppSurface['type'];
+//# sourceMappingURL=schema.d.ts.map

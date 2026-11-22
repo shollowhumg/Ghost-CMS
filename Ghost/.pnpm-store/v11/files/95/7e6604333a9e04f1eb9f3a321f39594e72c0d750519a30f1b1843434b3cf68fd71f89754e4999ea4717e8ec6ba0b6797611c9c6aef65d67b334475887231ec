@@ -1,0 +1,27 @@
+import { z } from 'zod';
+/**
+ * A place in Admin an app can send the publisher to. Places are named rather than given as
+ * paths or URLs, so an app can only open what Admin chooses to offer, and Admin decides which
+ * route each one opens. Adding a place means adding an entry here.
+ *
+ * Each entry is strict, so an object naming two places, or a place Admin doesn't know, is
+ * refused rather than partly read.
+ *
+ * `post` is for posts only. Pages have their own editor route, so they use `page`.
+ */
+export declare const PlaceSchema: z.ZodUnion<readonly [z.ZodObject<{
+    post: z.ZodObject<{
+        id: z.ZodString;
+    }, z.core.$strict>;
+}, z.core.$strict>, z.ZodObject<{
+    page: z.ZodObject<{
+        id: z.ZodString;
+    }, z.core.$strict>;
+}, z.core.$strict>, z.ZodObject<{
+    member: z.ZodObject<{
+        id: z.ZodString;
+    }, z.core.$strict>;
+}, z.core.$strict>, z.ZodObject<{
+    apps: z.ZodLiteral<true>;
+}, z.core.$strict>]>;
+//# sourceMappingURL=places.d.ts.map

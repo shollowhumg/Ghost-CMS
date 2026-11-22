@@ -1,0 +1,10 @@
+/** Host-managed upgrades. Construction must not perform I/O or require a host connection. */
+export class UpgradeBase {
+    constructor(_config = {}) {
+        Object.defineProperty(this, 'requiredFns', {
+            value: Object.freeze(['getStatus', 'createRequest', 'getJob']),
+            writable: false,
+        });
+    }
+}
+//# sourceMappingURL=base.js.map

@@ -1,0 +1,13 @@
+import { z } from 'zod';
+/**
+ * Unknown fields are dropped rather than refused, unlike in the calls over the channel. A newer
+ * SDK may add fields to its hello, and if an older Admin refused them, the page would never
+ * connect.
+ */
+export declare const HelloMessageSchema: z.ZodObject<{
+    type: z.ZodLiteral<"ghost-app:hello">;
+    sdk: z.ZodString;
+    document: z.ZodString;
+}, z.core.$strip>;
+export type HelloMessage = z.infer<typeof HelloMessageSchema>;
+//# sourceMappingURL=messages.d.ts.map

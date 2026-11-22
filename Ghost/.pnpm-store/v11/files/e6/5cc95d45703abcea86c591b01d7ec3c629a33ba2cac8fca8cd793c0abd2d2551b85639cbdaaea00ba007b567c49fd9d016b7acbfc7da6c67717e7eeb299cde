@@ -1,0 +1,822 @@
+import * as childProcess from 'node:child_process';
+import { createClient, erc20Abi, http, isAddress, zeroAddress, } from 'viem';
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { readContract, waitForTransactionReceipt } from 'viem/actions';
+import * as viemChains from 'viem/chains';
+import { Actions } from 'viem/tempo';
+import { tempoModerato, tempo as tempoMainnetChain } from 'viem/tempo/chains';
+import * as Challenge from '../../Challenge.js';
+import * as ProofRealm from '../../client/internal/ProofRealm.js';
+import * as Mppx from '../../client/Mppx.js';
+import * as Constants from '../../Constants.js';
+import * as Receipt from '../../Receipt.js';
+import { tempo as tempoMethods } from '../../tempo/client/index.js';
+import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js';
+import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js';
+import { isEventStream, parseEvent, } from '../../tempo/session/precompile/Protocol.js';
+import { resolveAccount, resolveAccountName } from '../account.js';
+import { assertSamePaymentRequest, flattenConfigMethods, loadConfig, preparePayment, resolvePlugin, } from '../internal.js';
+import { fetchTokenInfo, confirm, pc } from '../utils.js';
+import { validateRealmMatchesHost } from './challenge.js';
+import { buildUrl } from './discovery.js';
+import { check, fail, fetchWithTimeout, formatBytes, isValidIntegerAmount, parseHeaders, skip, warn, } from './helpers.js';
+async function provisionAndPayTestnet(challenge, verbose, silent) {
+    try {
+        if (!silent)
+            console.log(pc.dim('    Provisioning testnet wallet and funding via faucet...'));
+        const key = generatePrivateKey();
+        const account = privateKeyToAccount(key);
+        const client = createClient({ chain: tempoModerato, transport: http() });
+        if (isTempoSessionChallenge(challenge)) {
+            const { chainId, operator } = challenge.request.methodDetails ?? {};
+            if (chainId === tempoModerato.id &&
+                typeof operator === 'string' &&
+                isAddress(operator) &&
+                operator !== zeroAddress) {
+                const hashes = await Actions.faucet.fund(client, { account: operator });
+                await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })));
+            }
+        }
+        const hashes = await Actions.faucet.fund(client, { account });
+        await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })));
+        if (!silent)
+            console.log(pc.dim(`    Using wallet: ${account.address}`));
+        // The faucet tx receipt can land before the RPC's balance reads are
+        // consistent with it, so poll briefly for the funded balance to appear
+        // rather than racing straight into the charge.
+        const currency = challenge.request.currency;
+        if (typeof currency === 'string') {
+            for (let attempt = 0; attempt < 10; attempt++) {
+                const balance = await Actions.token
+                    .getBalance(client, { account: account.address, token: currency })
+                    .catch(() => undefined);
+                if (balance && balance.amount > 0n)
+                    break;
+                await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+        }
+        const methods = [...tempoMethods({ account })];
+        return { methods };
+    }
+    catch (error) {
+        if (verbose)
+            console.log(pc.dim(`    Provisioning failed: ${error.message}`));
+        return undefined;
+    }
+}
+async function resolveWalletAddress() {
+    const accountName = resolveAccountName();
+    const { isTempoAccount } = await import('../utils.js');
+    const { resolveTempoAccount } = await import('../plugins/tempo.js');
+    if (isTempoAccount(accountName)) {
+        const entry = resolveTempoAccount(accountName);
+        if (entry)
+            return entry.wallet_address;
+    }
+    try {
+        const account = await resolveAccount();
+        return account.address;
+    }
+    catch {
+        return undefined;
+    }
+}
+// Auto-detect Stripe test key from the Stripe CLI if installed and logged in.
+function resolveStripeKey(verbose) {
+    try {
+        const { execSync } = childProcess;
+        const output = execSync('stripe config --list', { encoding: 'utf8', timeout: 5000 });
+        const match = output.match(/test_mode_api_key\s*=\s*'([^']+)'/);
+        if (match?.[1]) {
+            if (verbose)
+                console.log(pc.dim('    Using Stripe test key from stripe CLI'));
+            return match[1];
+        }
+    }
+    catch { }
+    return undefined;
+}
+async function fetchEvmTokenInfo(chain, token, account) {
+    const client = createClient({ chain, transport: http() });
+    const [balance, decimals, symbol] = await Promise.all([
+        account
+            ? readContract(client, {
+                address: token,
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                args: [account],
+            })
+            : 0n,
+        readContract(client, { address: token, abi: erc20Abi, functionName: 'decimals' }),
+        readContract(client, { address: token, abi: erc20Abi, functionName: 'symbol' }).catch(() => undefined),
+    ]);
+    return { balance, decimals, symbol: symbol ?? undefined };
+}
+function resolveEvmChain(chainId) {
+    const all = Object.values(viemChains);
+    return all.find((c) => c.id === chainId);
+}
+function formatAmount(amount, decimals) {
+    return `$${(Number(amount) / 10 ** decimals).toFixed(2)}`;
+}
+function methodSetupHint(challenge) {
+    switch (challenge.method) {
+        case Constants.Methods.evm:
+            return 'no EVM payment plugin yet';
+        case 'solana':
+            return 'no Solana payment plugin yet';
+        default:
+            return `no plugin for ${challenge.method}/${challenge.intent}`;
+    }
+}
+export async function validatePaymentFlow(baseUrl, endpoint, verbose, options) {
+    const results = [];
+    const url = buildUrl(baseUrl, endpoint, options.query);
+    const fetchHeaders = parseHeaders(options.extraHeaders);
+    let fetchBody;
+    if (options.body) {
+        fetchBody = options.body;
+        fetchHeaders['content-type'] = 'application/json';
+    }
+    // Get a fresh challenge
+    let challengeResponse;
+    try {
+        challengeResponse = await fetchWithTimeout(url, {
+            method: endpoint.method,
+            headers: fetchHeaders,
+            body: fetchBody ?? null,
+        });
+    }
+    catch (error) {
+        results.push(fail('Payment: fetch challenge', error.message));
+        return results;
+    }
+    if (challengeResponse.status !== 402) {
+        results.push(skip('Payment: skipped', `Endpoint returned ${challengeResponse.status}`));
+        return results;
+    }
+    // Parse all challenges
+    let challenges;
+    try {
+        challenges = Challenge.fromResponseList(challengeResponse);
+    }
+    catch (error) {
+        results.push(fail('Payment: parse challenge', error.message));
+        return results;
+    }
+    if (challenges.length === 0) {
+        results.push(fail('Payment: parse challenge', 'No Payment challenges in response'));
+        return results;
+    }
+    const realmResults = [];
+    validateRealmMatchesHost(challenges, new URL(url).hostname, realmResults);
+    const realmFailures = realmResults.filter((result) => result.severity === 'fail');
+    if (realmFailures.length > 0) {
+        results.push(...realmFailures);
+        options.onResults?.(realmFailures);
+        return results;
+    }
+    const loaded = await loadConfig().catch(() => undefined);
+    // Testnet Tempo: always use ephemeral wallet (zero-setup, free money)
+    const tempoTestnetChallenge = challenges.find((ch) => {
+        if (ch.method !== Constants.Methods.tempo)
+            return false;
+        if (flattenConfigMethods(loaded?.config)?.some((method) => method.name === ch.method && method.intent === ch.intent))
+            return false;
+        const req = ch.request;
+        const md = req.methodDetails;
+        return typeof md?.chainId === 'number' && md.chainId !== tempoChainIds.mainnet;
+    });
+    if (tempoTestnetChallenge) {
+        const provisioned = await provisionAndPayTestnet(tempoTestnetChallenge, verbose, options.silent);
+        if (provisioned) {
+            try {
+                const raw = captureEventStream((input, init) => fetchWithTimeout(input, init ?? {}, 30_000));
+                const mppx = Mppx.create({
+                    methods: provisioned.methods,
+                    polyfill: false,
+                    async onChallenge(challenge, { createCredential }) {
+                        assertSamePaymentRequest(tempoTestnetChallenge, challenge);
+                        const context = await preparePayment(challenge, loaded?.config.extensions);
+                        const credential = await createCredential(context);
+                        results.push(check('Payment: submitted', 'ephemeral testnet wallet'));
+                        return credential;
+                    },
+                    fetch: raw.fetch,
+                });
+                const response = await mppx.fetch(url, {
+                    method: endpoint.method,
+                    headers: fetchHeaders,
+                    body: fetchBody ?? null,
+                });
+                await validatePaymentResponse(results, response, verbose, tempoModerato, isTempoSessionChallenge(tempoTestnetChallenge), raw.receipt);
+            }
+            catch (error) {
+                results.push(fail('Payment: create credential', error.message));
+            }
+        }
+        else {
+            results.push(fail('Payment: auto-provision wallet', 'Failed to create and fund testnet wallet'));
+        }
+        options.onResults?.(results);
+    }
+    // Try each remaining challenge method (tempo testnet already handled above),
+    // so validate exercises every payment method the server offers, same as mainnet.
+    const isInteractive = options.interactive;
+    const stripeKey = process.env.MPPX_STRIPE_SECRET_KEY ?? resolveStripeKey(verbose);
+    const isStripeTestKey = stripeKey?.startsWith('sk_test_') || stripeKey?.startsWith('rk_test_');
+    const supportedPaymentMethods = new Set([
+        Constants.Methods.tempo,
+        Constants.Methods.evm,
+        Constants.Methods.stripe,
+    ]);
+    for (const challenge of challenges) {
+        if (challenge === tempoTestnetChallenge)
+            continue;
+        if (!supportedPaymentMethods.has(challenge.method))
+            continue;
+        if (!options.silent)
+            console.log('');
+        const flushStart = results.length;
+        const flush = () => {
+            if (options.onResults && results.length > flushStart)
+                options.onResults(results.slice(flushStart));
+        };
+        const tag = `Payment [${challenge.method}]`;
+        try {
+            switch (challenge.method) {
+                case Constants.Methods.tempo:
+                case Constants.Methods.evm:
+                    await attemptCryptoPayment(challenge, tag, {
+                        results,
+                        url,
+                        endpoint,
+                        fetchHeaders,
+                        fetchBody,
+                        verbose,
+                        loaded,
+                        isInteractive,
+                        options,
+                    });
+                    break;
+                case Constants.Methods.stripe:
+                    await attemptStripePayment(challenge, tag, {
+                        results,
+                        url,
+                        endpoint,
+                        fetchHeaders,
+                        fetchBody,
+                        verbose,
+                        loaded,
+                        isInteractive,
+                        isStripeTestKey: isStripeTestKey ?? false,
+                        stripeKey,
+                        options,
+                    });
+                    break;
+            }
+        }
+        finally {
+            flush();
+        }
+    }
+    return results;
+}
+async function attemptCryptoPayment(challenge, tag, ctx) {
+    const { results, url, endpoint, fetchHeaders, fetchBody, verbose, loaded, options } = ctx;
+    const request = challenge.request;
+    const methodDetails = request.methodDetails;
+    const requiredAmount = isValidIntegerAmount(request.amount)
+        ? BigInt(request.amount)
+        : undefined;
+    let decimals = methodDetails?.decimals ?? request.decimals ?? 6;
+    const currency = request.currency;
+    const { plugin, method: directMethod } = resolvePlugin(challenge, loaded?.config);
+    if (!plugin && !directMethod) {
+        results.push(skip(tag, methodSetupHint(challenge)));
+        return;
+    }
+    // Direct methods own their payer; the CLI wallet may be unrelated or absent.
+    let walletAddress;
+    if (!directMethod) {
+        try {
+            walletAddress = await resolveWalletAddress();
+        }
+        catch { }
+        if (!walletAddress) {
+            results.push(skip(tag, 'no wallet configured. Run "mppx account create" to create one.'));
+            return;
+        }
+    }
+    // Pre-flight balance check and chain resolution
+    let paymentChain;
+    if (challenge.method === Constants.Methods.tempo) {
+        const chainId = methodDetails?.chainId ??
+            (directMethod ? undefined : tempoMainnetChain.id);
+        if (chainId !== undefined)
+            paymentChain = chainId === tempoModerato.id ? tempoModerato : resolveEvmChain(chainId);
+    }
+    else if (challenge.method === Constants.Methods.evm) {
+        const chainId = methodDetails?.chainId;
+        if (chainId)
+            paymentChain = resolveEvmChain(chainId);
+    }
+    if (requiredAmount && currency && !paymentChain) {
+        results.push(skip(tag, 'unable to resolve payment chain and verify token decimals'));
+        return;
+    }
+    let tokenSymbol;
+    if (requiredAmount && currency && paymentChain) {
+        try {
+            let balance;
+            if (challenge.method === Constants.Methods.tempo) {
+                const client = createClient({ chain: paymentChain, transport: http() });
+                const info = await fetchTokenInfo(client, currency, (walletAddress ?? zeroAddress), {
+                    requireDecimals: true,
+                });
+                balance = info.balance;
+                decimals = info.decimals;
+                tokenSymbol = info.symbol;
+            }
+            else {
+                const info = await fetchEvmTokenInfo(paymentChain, currency, walletAddress);
+                balance = info.balance;
+                decimals = info.decimals;
+                tokenSymbol = info.symbol;
+            }
+            if (walletAddress && balance < requiredAmount) {
+                const requiredDisplay = formatAmount(requiredAmount, decimals);
+                const balanceDisplay = formatAmount(balance, decimals);
+                const symbol = tokenSymbol ?? 'tokens';
+                results.push(skip(tag, `insufficient balance (have ${balanceDisplay}, need ${requiredDisplay} ${symbol} on ${paymentChain.name})`, `Fund wallet ${walletAddress} with at least ${requiredDisplay} ${symbol} on ${paymentChain.name}.`));
+                return;
+            }
+        }
+        catch (e) {
+            if (verbose)
+                console.log(pc.dim(`    Balance check skipped: ${e.message}`));
+            results.push(skip(tag, 'unable to verify token balance and decimals from the payment chain'));
+            return;
+        }
+    }
+    // Prompt
+    const amountDisplay = requiredAmount ? formatAmount(requiredAmount, decimals) : 'unknown amount';
+    const tokenDisplay = tokenSymbol ?? (currency?.length === 3 ? currency.toUpperCase() : '');
+    const chainName = paymentChain?.name;
+    const paymentDesc = `${amountDisplay}${tokenDisplay ? ` ${tokenDisplay}` : ''}${chainName ? ` on ${chainName}` : ''}`;
+    if (!options.silent)
+        console.log(pc.dim(walletAddress
+            ? `    Attempting payment with wallet ${walletAddress}`
+            : '    Attempting payment with configured method'));
+    if (!directMethod && paymentChain?.testnet) {
+        if (!options.silent)
+            console.log(pc.dim(`    Auto-approved: ${paymentDesc} (testnet)`));
+    }
+    else if (!options.yes && !ctx.isInteractive) {
+        results.push(skip(tag, 'non-interactive mode, use --yes to approve'));
+        return;
+    }
+    else if (!options.yes) {
+        const ok = await confirm(`  ${pc.yellow('Pay')} ${paymentDesc}. Continue?`, false);
+        if (!ok) {
+            results.push(skip(tag, 'declined'));
+            return;
+        }
+    }
+    else {
+        if (!options.silent)
+            console.log(pc.dim(`    Auto-approved: ${paymentDesc}`));
+    }
+    let methods;
+    let createCredentialFn;
+    let credentialContext;
+    if (plugin) {
+        try {
+            const pluginResult = await plugin.setup({
+                challenge,
+                options: { network: 'mainnet' },
+                methodOpts: {},
+            });
+            methods = pluginResult.methods;
+            createCredentialFn = pluginResult.createCredential;
+            credentialContext = pluginResult.credentialContext;
+        }
+        catch (error) {
+            results.push(skip(tag, error.message));
+            return;
+        }
+    }
+    else {
+        methods = [directMethod];
+    }
+    if (directMethod && isTempoSessionChallenge(challenge)) {
+        let initial = true;
+        const raw = captureEventStream((input, init) => fetchWithTimeout(input, init ?? {}, 30_000));
+        const mppx = Mppx.create({
+            methods: [directMethod],
+            polyfill: false,
+            async onChallenge(retry, { createCredential }) {
+                const context = await preparePayment(retry, loaded?.config.extensions);
+                assertSamePaymentRequest(challenge, retry);
+                const credential = await createCredential(context);
+                results.push(check(`${tag}: submitted`));
+                return credential;
+            },
+            fetch: async (input, init) => {
+                if (initial) {
+                    initial = false;
+                    return new Response(null, {
+                        status: 402,
+                        headers: {
+                            [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
+                        },
+                    });
+                }
+                return raw.fetch(input, init);
+            },
+        });
+        try {
+            const response = await mppx.fetch(url, {
+                method: endpoint.method,
+                headers: fetchHeaders,
+                body: fetchBody ?? null,
+            });
+            await validatePaymentResponse(results, response, verbose, paymentChain, true, raw.receipt);
+        }
+        catch (error) {
+            results.push(fail(tag, error.message));
+        }
+        return;
+    }
+    const credential = await createAndSend(challenge, methods, createCredentialFn, tag, results, loaded?.config.extensions, credentialContext, url);
+    if (!credential)
+        return;
+    plugin?.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders });
+    await sendAndValidateResponse(results, url, endpoint, credential, fetchHeaders, fetchBody, verbose, paymentChain, Challenge.credentialHeader(challenge), isTempoSessionChallenge(challenge));
+}
+async function attemptStripePayment(challenge, tag, ctx) {
+    const { results, url, endpoint, fetchHeaders, fetchBody, verbose, loaded, options, stripeKey } = ctx;
+    const { plugin, method: directMethod } = resolvePlugin(challenge, loaded?.config);
+    if (!plugin && !directMethod) {
+        results.push(skip(tag, 'no Stripe payment method available'));
+        return;
+    }
+    const isStripeTestKey = Boolean(plugin && !loaded?.config.plugins?.includes(plugin) && ctx.isStripeTestKey);
+    const request = challenge.request;
+    const requiredAmount = isValidIntegerAmount(request.amount)
+        ? BigInt(request.amount)
+        : undefined;
+    const decimals = request.decimals ?? 2;
+    const currency = request.currency;
+    const amountDisplay = requiredAmount ? formatAmount(requiredAmount, decimals) : 'unknown amount';
+    const tokenDisplay = currency?.length === 3 ? currency.toUpperCase() : '';
+    const paymentDesc = `${amountDisplay}${tokenDisplay ? ` ${tokenDisplay}` : ''} via Stripe${isStripeTestKey ? ' (testmode)' : ''}`;
+    if (isStripeTestKey) {
+        if (!options.silent)
+            console.log(pc.dim(`    Attempting: ${paymentDesc}`));
+    }
+    else if (!options.yes && !ctx.isInteractive) {
+        results.push(skip(tag, 'non-interactive mode, use --yes to approve'));
+        return;
+    }
+    else if (!options.yes) {
+        const ok = await confirm(`  ${pc.yellow('Pay')} ${paymentDesc}. Continue?`, false);
+        if (!ok) {
+            results.push(skip(tag, 'declined'));
+            return;
+        }
+    }
+    else {
+        if (!options.silent)
+            console.log(pc.dim(`    Auto-approved: ${paymentDesc}`));
+    }
+    let methods;
+    let createCredentialFn;
+    let credentialContext;
+    if (plugin) {
+        try {
+            const methodOpts = { paymentMethod: 'pm_card_visa' };
+            if (stripeKey)
+                methodOpts.secretKey = stripeKey;
+            const pluginResult = await plugin.setup({
+                challenge,
+                options: {},
+                methodOpts,
+            });
+            methods = pluginResult.methods;
+            createCredentialFn = pluginResult.createCredential;
+            credentialContext = pluginResult.credentialContext;
+        }
+        catch (error) {
+            results.push(skip(tag, error.message));
+            return;
+        }
+    }
+    else {
+        methods = [directMethod];
+    }
+    const credential = await createAndSend(challenge, methods, createCredentialFn, tag, results, loaded?.config.extensions, credentialContext, url);
+    if (!credential)
+        return;
+    plugin?.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders });
+    // Stripe testmode: detect livemode rejection gracefully
+    if (isStripeTestKey) {
+        const resp = await fetchWithTimeout(url, {
+            method: endpoint.method,
+            headers: { ...fetchHeaders, [Challenge.credentialHeader(challenge)]: credential },
+            body: fetchBody ?? null,
+        }, 30_000);
+        if (resp.status >= 200 && resp.status < 300) {
+            results.push(check(`${tag}: successful`, `HTTP ${resp.status}`));
+        }
+        else {
+            results.push(skip(`${tag}: server is in livemode`, undefined, 'Run your server with a Stripe test key to automatically validate Stripe payments in testmode.'));
+        }
+        return;
+    }
+    await sendAndValidateResponse(results, url, endpoint, credential, fetchHeaders, fetchBody, verbose, undefined, Challenge.credentialHeader(challenge));
+}
+async function createAndSend(challenge, methods, createCredentialFn, tag, results, extensions, initialCredentialContext, url) {
+    const fakeResponse = new Response(null, {
+        status: 402,
+        headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
+    });
+    try {
+        // The credential goes to url, so only sign a zero-amount proof for a realm its server owns.
+        ProofRealm.assert(challenge, new URL(url), undefined);
+        const credentialContext = await preparePayment(challenge, extensions, initialCredentialContext);
+        let credential;
+        if (createCredentialFn) {
+            credential = await createCredentialFn(fakeResponse, credentialContext);
+        }
+        else {
+            const mppx = Mppx.create({ methods, polyfill: false });
+            credential = await mppx.createCredential(fakeResponse, credentialContext);
+        }
+        results.push(check(`${tag}: submitted`));
+        return credential;
+    }
+    catch (error) {
+        const msg = error.message;
+        if (msg.toLowerCase().includes('insufficient')) {
+            results.push(skip(tag, `insufficient balance: ${msg}`));
+        }
+        else {
+            results.push(fail(tag, msg));
+        }
+        return undefined;
+    }
+}
+async function sendAndValidateResponse(results, url, endpoint, credential, baseHeaders, fetchBody, verbose, explorerChain, credentialHeader = Constants.Headers.authorization, session = false) {
+    let paymentResponse;
+    try {
+        paymentResponse = await fetchWithTimeout(url, {
+            method: endpoint.method,
+            headers: { ...baseHeaders, [credentialHeader]: credential },
+            body: fetchBody ?? null,
+        }, 30_000);
+    }
+    catch (error) {
+        results.push(fail('Payment: send credential', error.message));
+        return results;
+    }
+    return validatePaymentResponse(results, paymentResponse, verbose, explorerChain, session);
+}
+async function validatePaymentResponse(results, paymentResponse, verbose, explorerChain, session = false, streamReceipt) {
+    if (paymentResponse.status === 402) {
+        const body = await paymentResponse.text().catch(() => '');
+        let detail = 'Payment rejected';
+        try {
+            const problem = JSON.parse(body);
+            detail = problem.detail ?? problem.title ?? detail;
+        }
+        catch { }
+        results.push(fail('Payment: accepted', detail, 'The server rejected a valid credential. Check that your payment verification logic accepts the credential format and that the payment was processed on-chain.'));
+        return results;
+    }
+    if (paymentResponse.status >= 400 && paymentResponse.status < 500) {
+        results.push(warn('Payment: post-payment response', `Got ${paymentResponse.status}`, 'Payment succeeded but the endpoint returned a client error. The endpoint likely requires request body parameters. Use --body to provide them.'));
+    }
+    else if (paymentResponse.status >= 500) {
+        results.push(fail('Payment: server response', `Got ${paymentResponse.status}`, 'Payment was accepted but the server errored while generating the response. Check server logs for the underlying error.'));
+        return results;
+    }
+    else {
+        results.push(check('Payment: successful', `HTTP ${paymentResponse.status}`));
+    }
+    // Validate receipt
+    const contentType = paymentResponse.headers.get('content-type') ?? '';
+    const receiptHeader = paymentResponse.headers.get(Constants.Headers.paymentReceipt);
+    const stream = !receiptHeader && session && isEventStream(paymentResponse);
+    const body = await paymentResponse.text().catch(() => '');
+    if (stream) {
+        // SSE sessions deliver the receipt as a final payment-receipt event instead of a header.
+        // The session client consumes that event, so it is captured from the server's stream as
+        // the client reads it; a stream read directly is parsed here.
+        const captured = streamReceipt?.();
+        const receipt = captured === undefined ? findReceipt(body) : (captured ?? undefined);
+        if (receipt)
+            results.push(check('Payment receipt in event stream', receipt.reference));
+        else
+            results.push(fail('Payment receipt in event stream', undefined, 'SSE session responses without a Payment-Receipt header must end with an "event: payment-receipt" carrying the session receipt.'));
+    }
+    else if (!receiptHeader) {
+        results.push(fail('Payment-Receipt header present', undefined, 'After accepting payment, include a Payment-Receipt header with a base64url-encoded JSON object containing: method, reference, status ("success"), and timestamp (ISO 8601).'));
+    }
+    else {
+        results.push(check('Payment-Receipt header present'));
+        try {
+            const receipt = Receipt.deserialize(receiptHeader);
+            results.push(check('Receipt parseable'));
+            if (receipt.status === 'success') {
+                results.push(check('Receipt status is "success"'));
+            }
+            else {
+                results.push(fail('Receipt status is "success"', `Got: ${receipt.status}`));
+            }
+            if (receipt.reference) {
+                const validTxHash = /^0x[0-9a-fA-F]{64}$/.test(receipt.reference);
+                const validStripeRef = receipt.reference.startsWith('pi_');
+                if (validTxHash || validStripeRef) {
+                    results.push(check('Receipt reference valid', receipt.reference.slice(0, 20) + '...'));
+                }
+                else {
+                    results.push(warn('Receipt reference format', receipt.reference.slice(0, 40)));
+                }
+            }
+            else {
+                results.push(warn('Receipt has reference', 'No reference field'));
+            }
+            if (receipt.timestamp) {
+                const ts = new Date(receipt.timestamp);
+                const age = Date.now() - ts.getTime();
+                if (age < 60_000) {
+                    results.push(check('Receipt timestamp recent', `${Math.round(age / 1000)}s ago`));
+                }
+                else {
+                    results.push(warn('Receipt timestamp recent', `${Math.round(age / 60000)}m ago`));
+                }
+            }
+            if (verbose) {
+                console.log(pc.dim(`    Receipt: ${JSON.stringify(receipt, null, 2)}`));
+            }
+        }
+        catch (error) {
+            results.push(fail('Receipt parseable', error.message));
+        }
+    }
+    // Validate response body
+    if (body.length > 0) {
+        results.push(check('Response body non-empty', `${contentType.split(';')[0]}, ${formatBytes(body.length)}`));
+    }
+    else {
+        const suspiciousHeaders = [...paymentResponse.headers.entries()].filter(([key]) => !key.startsWith('x-') &&
+            ![
+                'content-type',
+                'content-length',
+                'date',
+                'server',
+                'connection',
+                'keep-alive',
+                'cache-control',
+                'vary',
+                'access-control-allow-origin',
+                'payment-receipt',
+                'payment-session',
+                'payment-session-snapshot',
+            ].includes(key.toLowerCase()));
+        if (suspiciousHeaders.length > 0) {
+            results.push(warn('Response body empty -- data may be in headers only', suspiciousHeaders.map(([k]) => k).join(', ')));
+        }
+        else {
+            results.push(warn('Response body empty'));
+        }
+    }
+    if (!contentType) {
+        results.push(warn('Content-Type header set'));
+    }
+    else {
+        results.push(check('Content-Type header set', contentType.split(';')[0]));
+    }
+    // Explorer link for on-chain payments
+    if (receiptHeader) {
+        try {
+            const receipt = Receipt.deserialize(receiptHeader);
+            if (receipt.reference && /^0x[0-9a-fA-F]{64}$/.test(receipt.reference)) {
+                const explorerUrl = explorerChain?.blockExplorers?.default?.url;
+                if (explorerUrl) {
+                    const path = explorerUrl.includes('tempo') ? 'receipt' : 'tx';
+                    results.push(check('On-chain transaction', `${explorerUrl}/${path}/${receipt.reference}`));
+                }
+            }
+        }
+        catch { }
+    }
+    return results;
+}
+/** Returns the first session receipt in an event-stream body. */
+function findReceipt(body) {
+    for (const raw of body.replace(/\r\n|\r/g, '\n').split('\n\n')) {
+        const event = parseEvent(raw);
+        if (event?.type === 'payment-receipt')
+            return event.data;
+    }
+    return undefined;
+}
+/** Longest partial event kept while scanning; a receipt event is far smaller. */
+const maxPendingEventBytes = 1024 * 1024;
+/**
+ * Wraps a fetch so in-stream session receipts are seen as the session client reads them: the
+ * client consumes `payment-receipt` events before the caller sees the body. Event-stream
+ * responses without a `Payment-Receipt` header pass through a scanner that keeps only the
+ * current partial event, so nothing is buffered or left unread.
+ */
+/** @internal */
+export function captureEventStream(fetch) {
+    // `undefined`: no stream scanned; `null`: scanned without a receipt.
+    let receipt;
+    return {
+        async fetch(input, init) {
+            const response = await fetch(input, init);
+            if (!response.body ||
+                !isEventStream(response) ||
+                response.headers.get(Constants.Headers.paymentReceipt))
+                return response;
+            // Session management requests (such as mid-stream voucher posts) share this fetch, so a
+            // later stream without a receipt must not discard one already seen.
+            receipt ??= null;
+            const decoder = new TextDecoder();
+            // Normalized pieces of the current partial event, joined only when the event ends, so a
+            // long event costs linear time. A CR that may start a CRLF is held apart.
+            let parts = [];
+            let size = 0;
+            let heldCr = false;
+            // Set after an oversized event is dropped, until its end, so its remaining lines are
+            // never parsed as an event of their own.
+            let skipping = false;
+            const scan = (text, done) => {
+                let chunk = heldCr ? `\r${text}` : text;
+                heldCr = !done && chunk.endsWith('\r');
+                if (heldCr)
+                    chunk = chunk.slice(0, -1);
+                let rest = chunk.replace(/\r\n|\r/g, '\n');
+                const events = [];
+                // A boundary split across chunks: the partial event ends in a newline and this text starts with one.
+                if (rest.startsWith('\n') && parts.at(-1)?.endsWith('\n')) {
+                    events.push(parts.join('').slice(0, -1));
+                    parts = [];
+                    size = 0;
+                    rest = rest.slice(1);
+                }
+                for (let index = rest.indexOf('\n\n'); index !== -1; index = rest.indexOf('\n\n')) {
+                    events.push(parts.join('') + rest.slice(0, index));
+                    parts = [];
+                    size = 0;
+                    rest = rest.slice(index + 2);
+                }
+                if (rest) {
+                    parts.push(rest);
+                    size += rest.length;
+                }
+                if (done) {
+                    events.push(parts.join(''));
+                    parts = [];
+                    size = 0;
+                }
+                if (skipping && events.length > 0) {
+                    events.shift();
+                    skipping = false;
+                }
+                if (size > maxPendingEventBytes) {
+                    // Keep a trailing newline: it may be the first half of the event's boundary.
+                    parts = parts.at(-1)?.endsWith('\n') ? ['\n'] : [];
+                    size = parts.length;
+                    skipping = true;
+                }
+                for (const raw of events) {
+                    const event = parseEvent(raw);
+                    if (event?.type === 'payment-receipt' && !receipt)
+                        receipt = event.data;
+                }
+            };
+            const body = response.body.pipeThrough(new TransformStream({
+                transform(chunk, controller) {
+                    scan(decoder.decode(chunk, { stream: true }), false);
+                    controller.enqueue(chunk);
+                },
+                flush() {
+                    scan(decoder.decode(), true);
+                },
+            }));
+            const scanned = new Response(body, {
+                headers: response.headers,
+                status: response.status,
+                statusText: response.statusText,
+            });
+            Object.defineProperty(scanned, 'url', { value: response.url });
+            return scanned;
+        },
+        receipt: () => receipt,
+    };
+}
+//# sourceMappingURL=payment.js.map

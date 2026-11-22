@@ -1,0 +1,65 @@
+# @tryghost/adapter-base-sso
+
+## 0.1.9
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.1.8
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies
+
+## 0.1.6
+
+### Patch Changes
+
+- Bumped TryGhost framework dependencies to their latest versions
+
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+## 0.1.4
+
+### Patch Changes
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+- Updated TryGhost/framework dependencies to their latest versions.
+
+- Exposed optional user status so SSO adapters can reject inactive owners before first-run setup.
+
+## 0.1.3
+
+### Patch Changes
+
+- Bumped framework dependencies
+
+## 0.1.2
+
+### Patch Changes
+
+- Update framework dependencies
+
+## 0.1.1
+
+### Patch Changes
+
+- Updated README documentation
+
+- Update @tryghost deps to latest

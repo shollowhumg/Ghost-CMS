@@ -1,0 +1,9 @@
+/**
+ * Defines a method without cloning schemas or wrapping callbacks.
+ *
+ * The pipeline parses the declared schemas before invoking these callbacks.
+ */
+export function defineMethod(method) {
+    return method;
+}
+//# sourceMappingURL=define-method.js.map

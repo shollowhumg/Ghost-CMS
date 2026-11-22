@@ -1,0 +1,584 @@
+import { TxEnvelopeTempo } from 'ox/tempo';
+import { keccak256, parseEventLogs, parseUnits, } from 'viem';
+import { prepareTransactionRequest, sendCallsSync, sendRawTransactionSync, sendTransactionSync, signTypedData, signTransaction, waitForTransactionReceipt, } from 'viem/actions';
+import { Abis, Actions, Addresses } from 'viem/tempo';
+import { tempo as tempo_chain } from 'viem/tempo/chains';
+import * as MethodResponse from '../../client/internal/MethodResponse.js';
+import * as Credential from '../../Credential.js';
+import * as Errors from '../../Errors.js';
+import * as Method from '../../Method.js';
+import * as Account from '../../viem/Account.js';
+import * as Client from '../../viem/Client.js';
+import * as z from '../../zod.js';
+import * as Attribution from '../Attribution.js';
+import * as AutoSwap from '../internal/auto-swap.js';
+import * as Charge_internal from '../internal/charge.js';
+import * as defaults from '../internal/defaults.js';
+import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js';
+import * as MachineTokenCharge from '../internal/machine-token-charge.js';
+import * as Proof from '../internal/proof.js';
+import * as Zone from '../internal/zone.js';
+import * as Methods from '../Methods.js';
+/**
+ * Seconds from now the client sets as the expiring-nonce `validBefore`,
+ * capped at the challenge expiry.
+ *
+ * Fee payers require at least `defaults.minRemainingValiditySeconds` (15s) of
+ * remaining validity when they co-sign, so a 25s window leaves about 10s for
+ * clock skew between client and server, signing and round trips. It stays inside
+ * the server's default 30s confirmation timeout and within sponsor policies whose
+ * `maxValidityWindowSeconds` is 25 or more.
+ */
+export const validityWindowSeconds = 25;
+const chargeContextSchema = z.object({
+    account: z.optional(z.custom()),
+    autoSwap: z.optional(z.custom()),
+    feeToken: z.optional(z.custom()),
+    mode: z.optional(z.enum(Methods.chargeModes)),
+});
+/**
+ * Creates a Tempo charge method intent for usage on the client.
+ *
+ * @example
+ * ```ts
+ * import { tempo } from 'mppx/client'
+ * import { privateKeyToAccount } from 'viem/accounts'
+ *
+ * const charge = tempo.charge({
+ *   account: privateKeyToAccount('0x...'),
+ * })
+ * ```
+ */
+export function charge(parameters = {}) {
+    const { clientId } = parameters;
+    // Caps are denominated in the challenge currency, so they require a currency pin.
+    if ((parameters.maxAmount !== undefined || parameters.maxAtomicAmount !== undefined) &&
+        parameters.currencies === undefined)
+        throw new Error('Tempo charge maxAmount and maxAtomicAmount require currencies.');
+    const caps = {
+        maxAmount: parseMaxAmount(parameters.maxAmount, parameters.decimals),
+        maxAtomicAmount: parameters.maxAtomicAmount === undefined ? undefined : BigInt(parameters.maxAtomicAmount),
+    };
+    const getClient = Client.getResolver({
+        chain: tempo_chain,
+        getClient: parameters.getClient,
+        rpcUrl: defaults.rpcUrl,
+    });
+    const getAccount = Account.getResolver({ account: parameters.account });
+    assertZone(parameters.zone);
+    // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
+    const pendingZoneWithdrawals = new Map();
+    const method = Method.toClient(Methods.charge, {
+        // Skip offers that violate client policy so an acceptable offer can be chosen.
+        canHandleChallenge({ challenge }) {
+            try {
+                assertChallengePolicy(parameters, caps, challenge.request);
+                return true;
+            }
+            catch {
+                return false;
+            }
+        },
+        context: chargeContextSchema,
+        async createCredential({ challenge, context }) {
+            assertChallengePolicy(parameters, caps, challenge.request);
+            // Sign on the pinned chain when the challenge omits a chain ID.
+            const challengeChainId = challenge.request.methodDetails?.chainId;
+            const resolvedChainId = challengeChainId ??
+                parameters.expectedChainId ??
+                (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined);
+            const client = await getClient({ chainId: resolvedChainId });
+            Client.assertChainId(client, resolvedChainId);
+            const chainId = resolvedChainId ?? client.chain?.id;
+            Client.assertAllowedChainId(parameters.allowedChainIds, chainId);
+            if (chainId === undefined)
+                throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.');
+            const { request } = challenge;
+            const { amount, methodDetails } = request;
+            const supportedModes = methodDetails?.supportedModes ?? ['pull', 'push'];
+            const zoneChain = parameters.zone?.client.chain;
+            const zoneId = parameters.zone
+                ? (parameters.zone.zoneId ?? Zone.idFromChainId(zoneChain?.id ?? 0))
+                : undefined;
+            // A Zone ID is only unique per parent chain, so the Zone must settle on the challenge's chain.
+            const zoneParentChainId = zoneChain?.sourceId ??
+                (zoneChain ? Zone.parentChainIdFromChainId(zoneChain.id) : undefined);
+            const explicitMode = context?.mode ?? parameters.mode;
+            // Pay from a Zone balance when the challenge accepts the configured Zone.
+            // Zone payments are push payments, so they follow the challenge's and client's modes.
+            if (BigInt(amount) > 0n &&
+                parameters.zone &&
+                zoneId !== undefined &&
+                zoneParentChainId === chainId &&
+                supportedModes.includes('push') &&
+                (explicitMode === undefined || explicitMode === 'push') &&
+                Zone.isAccepted(methodDetails?.zones, zoneId) &&
+                !methodDetails?.splits &&
+                // A withdrawal can't be undone, so start one only when it can settle before the
+                // challenge expires; an expired challenge would invite another payment.
+                (pendingZoneWithdrawals.has(zoneWithdrawalKey(challenge)) ||
+                    settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs)))
+                return createZoneCredential({
+                    challenge,
+                    clientId,
+                    client,
+                    pending: pendingZoneWithdrawals,
+                    zone: parameters.zone,
+                    zoneId,
+                });
+            const defaultAccount = getAccount(client, context);
+            const resolveAccount = async (operation) => (await parameters.resolveAccount?.({
+                account: defaultAccount,
+                chainId,
+                operation,
+            })) ?? defaultAccount;
+            // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
+            if (BigInt(amount) === 0n) {
+                const account = await resolveAccount({ kind: 'signPaymentProof' });
+                const signature = await signTypedData(client, {
+                    account,
+                    // `account` here is the signing account; the proof's bound payer is
+                    // `account.address` (echoed in the credential `source` below).
+                    ...Proof.typedData({
+                        account: account.address,
+                        chainId,
+                        challengeId: challenge.id,
+                        realm: challenge.realm,
+                    }),
+                });
+                return Credential.serialize({
+                    challenge,
+                    payload: { signature, type: 'proof' },
+                    source: Proof.proofSource({ address: account.address, chainId }),
+                });
+            }
+            const currency = request.currency;
+            const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency });
+            const memo = Attribution.encode({
+                challengeId: challenge.id,
+                clientId,
+                serverId: challenge.realm,
+            });
+            const transfers = Charge_internal.getTransfers({
+                amount,
+                methodDetails: {
+                    ...methodDetails,
+                    memo,
+                },
+                recipient: request.recipient,
+            });
+            const transferCalls = transfers.map((transfer) => Actions.token.transfer.call(client, {
+                amount: BigInt(transfer.amount),
+                ...(transfer.memo && { memo: transfer.memo }),
+                to: transfer.recipient,
+                token: currency,
+            }));
+            const autoSwap = AutoSwap.resolve(context?.autoSwap ?? parameters.autoSwap, AutoSwap.defaultCurrencies);
+            const machineTokenEnabled = methodDetails?.machineTokenEnabled === true;
+            const machineTokenCandidate = machineTokenEnabled
+                ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
+                : undefined;
+            let account = defaultAccount;
+            let machineTokenRoute;
+            if (machineTokenCandidate) {
+                const machineTokenAccount = await (async () => {
+                    try {
+                        return await resolveAccount({
+                            calls: machineTokenCandidate.calls,
+                            kind: 'executeCalls',
+                        });
+                    }
+                    catch {
+                        // A machine-token route is optional. A scoped account that cannot
+                        // execute it may still be able to satisfy the direct payment.
+                        return undefined;
+                    }
+                })();
+                if (machineTokenAccount) {
+                    machineTokenRoute = await MachineTokenCharge.findRoute(client, {
+                        account: machineTokenAccount.address,
+                        chainId,
+                        currency,
+                        transfers,
+                    });
+                    if (machineTokenRoute)
+                        account = machineTokenAccount;
+                }
+            }
+            let swapCalls;
+            if (!machineTokenRoute) {
+                account = await resolveAccount({
+                    kind: 'executeCalls',
+                    ...(autoSwap ? {} : { calls: transferCalls }),
+                });
+                swapCalls = autoSwap
+                    ? await AutoSwap.findCalls(client, {
+                        account: account.address,
+                        amountOut: BigInt(amount),
+                        tokenOut: currency,
+                        tokenIn: autoSwap.tokenIn,
+                        slippage: autoSwap.slippage,
+                        maxAmountIn: autoSwap.maxAmountIn,
+                    })
+                    : undefined;
+            }
+            const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls];
+            const allowedFeeTokens = defaultFeeTokens(chainId);
+            const explicitFeeToken = context?.feeToken ?? parameters.feeToken;
+            const feeToken = explicitFeeToken
+                ? explicitFeeToken
+                : machineTokenRoute || isMachineTokenCurrency
+                    ? await resolveFeeToken({
+                        account: account.address,
+                        allowedTokens: allowedFeeTokens,
+                        candidateTokens: allowedFeeTokens,
+                        client,
+                        prioritizeCandidates: true,
+                    })
+                    : undefined;
+            const mode = (() => {
+                const explicitMode = context?.mode ?? parameters.mode;
+                if (explicitMode) {
+                    if (!supportedModes.includes(explicitMode))
+                        throw new Error(`Challenge does not support ${explicitMode} mode.`);
+                    return explicitMode;
+                }
+                const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull';
+                if (supportedModes.includes(preferredMode))
+                    return preferredMode;
+                return supportedModes[0];
+            })();
+            const validBefore = (() => {
+                const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds;
+                if (!challenge.expires)
+                    return defaultExpiry;
+                // `validBefore` is an exclusive whole-second bound, so cap at the second
+                // after a (possibly fractional) expiry to stay valid as long as the challenge.
+                const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000) + 1;
+                return Math.min(defaultExpiry, challengeExpiry);
+            })();
+            if (mode === 'push') {
+                const { receipts } = account.type === 'local'
+                    ? {
+                        receipts: [
+                            await sendTransactionSync(client, {
+                                account,
+                                calls,
+                                ...(feeToken ? { feeToken } : {}),
+                                nonceKey: 'expiring',
+                                validBefore,
+                            }),
+                        ],
+                    }
+                    : await sendCallsSync(client, {
+                        account,
+                        ...(feeToken ? { capabilities: { feeToken } } : {}),
+                        calls: calls,
+                        experimental_fallback: calls.length === 1,
+                        forceAtomic: calls.length > 1,
+                    });
+                const hash = receipts?.[0]?.transactionHash;
+                if (!hash)
+                    throw new Error('No transaction receipt returned.');
+                return Credential.serialize({
+                    challenge,
+                    payload: { hash, type: 'hash' },
+                    source: Proof.proofSource({ address: account.address, chainId }),
+                });
+            }
+            // The fee payer rejects a sponsored transaction with under the minimum remaining validity,
+            // so refuse before signing rather than produce a credential the server must reject.
+            // The fee payer checks the signed `validBefore`, which is fixed before preparation, so the
+            // re-check measures both it and the challenge expiry against the current time.
+            const assertSponsorable = () => {
+                if (methodDetails?.feePayer !== true)
+                    return;
+                const minimumMs = defaults.minRemainingValiditySeconds * 1000;
+                const expiresMs = challenge.expires ? new Date(challenge.expires).getTime() : Infinity;
+                const now = Date.now();
+                if (!(expiresMs - now >= minimumMs))
+                    throw new Error(`Sponsored challenge expires in less than ${defaults.minRemainingValiditySeconds} seconds; the fee payer would reject the transaction. Request a new challenge.`);
+                if (!(validBefore * 1000 - now >= minimumMs))
+                    throw new Error(`Sponsored transaction preparation took too long: less than ${defaults.minRemainingValiditySeconds} seconds of its validity window remain, so the fee payer would reject it.`);
+            };
+            assertSponsorable();
+            const prepared = await prepareTransactionRequest(client, {
+                account,
+                calls,
+                ...(feeToken ? { feeToken } : {}),
+                nonceKey: 'expiring',
+                validBefore,
+            });
+            // Estimate before enabling fee-payer mode so Tempo includes sender
+            // signature and access-key verification costs in the gas budget.
+            prepared.gas = (prepared.gas ?? 0n) + 5000n;
+            if (methodDetails?.feePayer) {
+                const sponsored = prepared;
+                delete sponsored.feePayerSignature;
+                delete sponsored.feeToken;
+                sponsored.feePayer = true;
+            }
+            // Preparation is asynchronous: check again immediately before signing.
+            assertSponsorable();
+            const signature = await signTransaction(client, prepared);
+            return Credential.serialize({
+                challenge,
+                payload: { signature, type: 'transaction' },
+                source: Proof.proofSource({ address: account.address, chainId }),
+            });
+        },
+    });
+    // Share an in-flight signing so concurrent calls for one challenge cannot yield
+    // two independently settleable transactions. Settled signings are not reused.
+    const signing = new Map();
+    const createCredential = async (options) => {
+        // Enforce client policy on every call, including ones joining a signing.
+        assertChallengePolicy(parameters, caps, options.challenge.request);
+        const account = options.context?.account ?? parameters.account;
+        const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase();
+        const key = `${signer ?? ''}:${options.challenge.id}`;
+        let promise = signing.get(key);
+        if (!promise) {
+            promise = method.createCredential(options).finally(() => signing.delete(key));
+            signing.set(key, promise);
+        }
+        return promise;
+    };
+    return MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash);
+}
+/**
+ * Returns the final transaction hash of a credential, when known before settlement.
+ *
+ * Push credentials carry the broadcast hash; pull credentials hash a canonical,
+ * sender-signed 0x76 transaction. Sponsored transactions (0x78 envelopes or 0x76
+ * awaiting a fee payer) return `undefined` because the fee payer's co-signature
+ * changes the final hash.
+ */
+function transactionHash(credential) {
+    const parsed = Methods.charge.schema.credential.payload.safeParse(Credential.deserialize(credential).payload);
+    if (!parsed.success)
+        return undefined;
+    const payload = parsed.data;
+    if (payload.type === 'hash')
+        return payload.hash;
+    if (payload.type === 'zone')
+        return payload.hash;
+    const serialized = payload.signature;
+    if (payload.type !== 'transaction' || !serialized.startsWith(TxEnvelopeTempo.serializedType))
+        return undefined;
+    const transaction = TxEnvelopeTempo.deserialize(serialized);
+    if (!transaction.signature || transaction.feePayerSignature === null)
+        return undefined;
+    // Reject trailing or non-canonical bytes, which never identify an on-chain transaction.
+    if (TxEnvelopeTempo.serialize(transaction) !== serialized)
+        return undefined;
+    return keccak256(serialized);
+}
+/**
+ * Pays a challenge from a Zone balance: requests a withdrawal to the recipient
+ * with the challenge-bound memo, and returns a `zone` credential that names it
+ * by sender tag and the Tempo transaction hash that settled it.
+ */
+async function createZoneCredential(options) {
+    const { challenge, client, pending, zone, zoneId } = options;
+    const request = challenge.request;
+    const recipient = request.recipient;
+    // The whole challenge, so a challenge from another realm or request with the same ID never matches.
+    const key = zoneWithdrawalKey(challenge);
+    // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
+    // Concurrent calls for one challenge share the request, which is stored before it is sent.
+    let withdrawalRequest = pending.get(key);
+    if (!withdrawalRequest) {
+        const state = { sent: false };
+        withdrawalRequest = requestZoneWithdrawal(options, state);
+        pending.set(key, withdrawalRequest);
+        // Only a failure before the transaction was sent is safe to retry. After that, the
+        // withdrawal may have gone through, so retries of this challenge keep failing.
+        withdrawalRequest.catch(() => {
+            if (!state.sent)
+                pending.delete(key);
+        });
+    }
+    const senderTag = await withdrawalRequest;
+    let hash;
+    try {
+        hash = await Zone.waitForSettlement(client, {
+            portal: Zone.portalAddress(zoneId),
+            senderTag,
+            timeoutMs: settlementTimeoutMs(challenge.expires, zone.settlementTimeoutMs),
+            to: recipient,
+        });
+    }
+    catch (cause) {
+        throw new Errors.ZoneSettlementPendingError({
+            cause,
+            challengeId: challenge.id,
+            senderTag,
+            zoneId,
+        });
+    }
+    pending.delete(key);
+    return Credential.serialize({
+        challenge,
+        payload: { hash, senderTag, type: 'zone', zoneId },
+    });
+}
+/**
+ * Throws on Zone options that would fail only after an irreversible withdrawal:
+ * a `settlementTimeoutMs` that is not a finite, non-negative number, or a
+ * `zoneId` that names a different Zone from the one `zone.client` serves.
+ */
+function assertZone(zone) {
+    const timeoutMs = zone?.settlementTimeoutMs;
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0))
+        throw new Error('`zone.settlementTimeoutMs` must be a finite, non-negative number.');
+    const chainId = zone?.client.chain?.id;
+    if (zone?.zoneId === undefined || chainId === undefined)
+        return;
+    // Only chain IDs that follow a known Zone scheme name their Zone.
+    if (Zone.parentChainIdFromChainId(chainId) === undefined)
+        return;
+    const derived = Zone.idFromChainId(chainId);
+    if (derived !== zone.zoneId)
+        throw new Error(`zone.zoneId ${zone.zoneId} does not match Zone ${derived} of the zone.client chain ${chainId}.`);
+}
+/** Time the client allows for sending a Zone withdrawal before it waits for settlement. */
+const zoneSubmissionMarginMs = 15_000;
+/**
+ * Returns whether a Zone withdrawal can be sent and waited on for up to
+ * `settlementTimeoutMs` before `expires`.
+ */
+function settlesBeforeExpiry(expires, settlementTimeoutMs) {
+    if (!expires)
+        return true;
+    const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs;
+    return new Date(expires).getTime() - Date.now() > timeoutMs + zoneSubmissionMarginMs;
+}
+/** Returns how long to wait for settlement: `settlementTimeoutMs`, cut short at `expires`. */
+function settlementTimeoutMs(expires, settlementTimeoutMs) {
+    const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs;
+    if (!expires)
+        return timeoutMs;
+    return Math.max(0, Math.min(timeoutMs, new Date(expires).getTime() - Date.now()));
+}
+/** Keys a Zone withdrawal by its whole Challenge. Unlike `Challenge.serialize`, it accepts any field value. */
+function zoneWithdrawalKey(challenge) {
+    return JSON.stringify(challenge);
+}
+/** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
+const zoneReceiptRecoveryTimeoutMs = 15_000;
+/** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
+async function requestZoneWithdrawal(options, state) {
+    const { challenge, clientId, zone } = options;
+    const request = challenge.request;
+    const account = zone.client.account;
+    if (!account)
+        throw new Error('`zone.client` requires an account.');
+    const amount = BigInt(request.amount);
+    const currency = request.currency;
+    const recipient = request.recipient;
+    const memo = Attribution.encode({
+        challengeId: challenge.id,
+        clientId,
+        serverId: challenge.realm,
+    });
+    // The outbox pulls the amount plus its withdrawal fee.
+    const fee = await Actions.zone.getWithdrawalFee(zone.client);
+    const [, withdrawal] = Actions.zone.requestWithdrawal.calls({
+        amount,
+        // A bounced payout refunds the payer, not the payee's Zone address.
+        fallbackRecipient: account.address,
+        memo,
+        to: recipient,
+        token: currency,
+    });
+    // Prepare and sign first: a failure there sent nothing, so the challenge may be retried.
+    const prepared = await prepareTransactionRequest(zone.client, {
+        account,
+        calls: [
+            Actions.token.approve.call({
+                amount: amount + fee,
+                spender: Addresses.zoneOutbox,
+                token: currency,
+            }),
+            withdrawal,
+        ],
+    });
+    const serializedTransaction = await signTransaction(zone.client, prepared);
+    state.sent = true;
+    // The signed transaction fixes its hash, so a lost send response can still be recovered from the Zone.
+    const hash = keccak256(serializedTransaction);
+    const receipt = await sendRawTransactionSync(zone.client, { serializedTransaction }).catch((cause) => waitForTransactionReceipt(zone.client, {
+        hash,
+        timeout: zoneReceiptRecoveryTimeoutMs,
+    }).catch(() => {
+        const error = new Error(`Zone withdrawal outcome is unknown: transaction ${hash} may have been sent. Retrying this challenge does not withdraw again.`);
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true });
+        throw error;
+    }));
+    // A reverted withdrawal moved nothing, so the challenge may be retried.
+    if (receipt.status === 'reverted') {
+        state.sent = false;
+        throw new Error(`Zone withdrawal transaction ${receipt.transactionHash} reverted.`);
+    }
+    const [requested] = parseEventLogs({
+        abi: Abis.zoneOutbox,
+        eventName: 'WithdrawalRequested',
+        logs: receipt.logs,
+    });
+    if (!requested)
+        throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.');
+    return Zone.senderTag({
+        fallbackNonce: requested.args.fallbackNonce,
+        sender: requested.args.sender,
+        transactionHash: receipt.transactionHash,
+    });
+}
+/** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
+function parseMaxAmount(maxAmount, decimals) {
+    if (maxAmount === undefined)
+        return undefined;
+    if (decimals === undefined)
+        throw new Error('Tempo charge maxAmount requires currency decimals.');
+    // `parseUnits` rounds excess fractional digits, which could loosen the cap.
+    const fraction = maxAmount.split('.')[1]?.replace(/0+$/, '') ?? '';
+    if (fraction.length > decimals)
+        throw new Error(`Tempo charge maxAmount ${maxAmount} has more fractional digits than ${decimals} decimals allow.`);
+    return parseUnits(maxAmount, decimals);
+}
+/**
+ * Rejects a challenge whose chain, currency, recipients, or amount violate the client policy.
+ * Runs during challenge selection and again before any client, account, or signing work.
+ */
+function assertChallengePolicy(parameters, caps, request) {
+    const { amount, methodDetails, recipient } = request;
+    // Chain pinning: reject a challenge whose chain ID conflicts with the pinned one.
+    const challengeChainId = methodDetails?.chainId;
+    if (parameters.expectedChainId !== undefined &&
+        challengeChainId !== undefined &&
+        challengeChainId !== parameters.expectedChainId)
+        throw new Error(`Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`);
+    if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
+        Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId);
+    if (parameters.currencies &&
+        !parameters.currencies.some((c) => c.toLowerCase() === request.currency.toLowerCase()))
+        throw new Error(`Tempo charge currency is not allowed: ${request.currency}.`);
+    if (parameters.expectedRecipients) {
+        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()));
+        if (!recipient || !allowed.has(recipient.toLowerCase()))
+            throw new Error(`Unexpected primary recipient: ${recipient}`);
+        const splits = methodDetails?.splits;
+        if (splits) {
+            for (const split of splits) {
+                if (!allowed.has(split.recipient.toLowerCase()))
+                    throw new Error(`Unexpected split recipient: ${split.recipient}`);
+            }
+        }
+    }
+    if (caps.maxAtomicAmount !== undefined && BigInt(amount) > caps.maxAtomicAmount)
+        throw new Error('Tempo charge amount exceeds maxAtomicAmount.');
+    if (caps.maxAmount !== undefined && BigInt(amount) > caps.maxAmount)
+        throw new Error('Tempo charge amount exceeds maxAmount.');
+}
+//# sourceMappingURL=Charge.js.map

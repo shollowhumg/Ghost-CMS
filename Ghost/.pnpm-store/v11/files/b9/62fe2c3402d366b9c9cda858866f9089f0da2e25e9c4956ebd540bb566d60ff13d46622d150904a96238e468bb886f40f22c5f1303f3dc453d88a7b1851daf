@@ -1,0 +1,47 @@
+# @tryghost/kg-html-to-lexical
+
+## 1.4.5
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.4.4
+
+### Patch Changes
+
+- Updated dependencies
+
+- Updated dependencies:
+  - @tryghost/kg-default-nodes@2.3.0
+
+## 1.4.3
+
+### Patch Changes
+
+- Stopped publishing the TypeScript incremental build cache (build/tsconfig.tsbuildinfo) in the npm package
+
+## 1.4.2
+
+### Patch Changes
+
+- Updated dependencies
+
+## 1.4.1
+
+### Patch Changes
+
+- Republished with npm trusted publishing and provenance; no code changes
+
+## 1.4.0
+
+### Minor Changes
+
+- Update jsdom to 30 & node engines to match jsdom's
+
+### Patch Changes
+
+- Documented the package API and corrected the development instructions in the README
+
+- Updated dependencies:
+  - @tryghost/kg-default-nodes@2.2.0

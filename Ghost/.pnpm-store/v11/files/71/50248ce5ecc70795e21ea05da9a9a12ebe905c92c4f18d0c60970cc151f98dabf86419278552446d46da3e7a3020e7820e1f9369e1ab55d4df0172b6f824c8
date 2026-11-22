@@ -1,0 +1,9 @@
+declare const _default: {
+    readonly url: typeof import('./lib/url');
+    readonly tokens: typeof import('./lib/tokens');
+    readonly string: typeof import('./lib/string');
+    readonly identifier: typeof import('./lib/identifier');
+    readonly password: typeof import('./lib/password');
+    readonly secret: typeof import('./lib/secret');
+};
+export = _default;

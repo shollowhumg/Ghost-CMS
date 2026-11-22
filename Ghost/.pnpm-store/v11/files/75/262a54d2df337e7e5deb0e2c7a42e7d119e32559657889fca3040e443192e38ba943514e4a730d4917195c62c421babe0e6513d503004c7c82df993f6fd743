@@ -1,0 +1,91 @@
+import { commitReservedCharges, releaseReservedCharges, reserveChargeOrWait } from './Transports.js';
+/** Applies voucher reservation and spend commits to an async session stream. */
+export async function* meterIterable(options) {
+    const manual = typeof options.generate === 'function';
+    let prepaidUnits = options.prepaidUnits ?? 0;
+    const signal = options.signal ?? new AbortController().signal;
+    const reservation = {
+        store: options.store,
+        channelId: options.channelId,
+        reservationId: globalThis.crypto.randomUUID(),
+    };
+    let charged = false;
+    let pending = false;
+    const releaseOnAbort = () => {
+        void releaseReservedCharges(reservation).catch(() => { });
+    };
+    signal.addEventListener('abort', releaseOnAbort, { once: true });
+    if (signal.aborted)
+        releaseOnAbort();
+    const charge = async (amount) => {
+        signal.throwIfAborted();
+        await options.beforeCharge?.();
+        signal.throwIfAborted();
+        if (amount === undefined && prepaidUnits > 0) {
+            prepaidUnits -= 1;
+            if (manual)
+                options.onPrepaidChargeCommitted?.();
+            return;
+        }
+        if ((amount ?? options.tickCost) === 0n)
+            return;
+        await reserveChargeOrWait({
+            ...reservation,
+            requireExisting: pending,
+            amount: amount ?? options.tickCost,
+            emit: options.emitNeedVoucher,
+            formatNeedVoucher: options.formatNeedVoucher,
+            pollIntervalMs: options.pollIntervalMs,
+            signal,
+        });
+        pending = true;
+        if (manual)
+            await commit();
+        signal.throwIfAborted();
+    };
+    const commit = async () => {
+        signal.throwIfAborted();
+        await options.beforeCharge?.();
+        signal.throwIfAborted();
+        if (!pending)
+            return;
+        const channel = await commitReservedCharges(reservation);
+        if (!channel)
+            throw new Error('stream reservation was lost');
+        pending = false;
+        await options.onChargeCommitted?.(channel);
+    };
+    try {
+        const iterable = typeof options.generate === 'function'
+            ? options.generate({ charge, signal })
+            : options.generate;
+        const iterator = iterable[Symbol.asyncIterator]();
+        try {
+            while (!signal.aborted) {
+                const { done, value } = await iterator.next();
+                if (signal.aborted)
+                    break;
+                if (done) {
+                    if (manual && pending)
+                        await commit();
+                    break;
+                }
+                if (!manual && (!options.chargeOnce || !charged)) {
+                    await charge();
+                    charged = true;
+                }
+                await commit();
+                yield value;
+            }
+        }
+        finally {
+            await releaseReservedCharges(reservation);
+            await iterator.return?.();
+        }
+    }
+    finally {
+        signal.removeEventListener('abort', releaseOnAbort);
+        await releaseReservedCharges(reservation);
+    }
+}
+//# sourceMappingURL=MeteredStream.js.map

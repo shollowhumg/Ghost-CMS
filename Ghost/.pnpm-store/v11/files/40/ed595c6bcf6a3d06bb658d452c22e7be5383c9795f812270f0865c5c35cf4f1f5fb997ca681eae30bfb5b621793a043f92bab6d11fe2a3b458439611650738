@@ -1,0 +1,5 @@
+/** Current mppx package version. */
+export declare const version = "0.17.4";
+/** Canonical SDK identifier for this mppx release. */
+export declare const sdkIdentifier = "mppx/0.17.4";
+//# sourceMappingURL=version.d.ts.map

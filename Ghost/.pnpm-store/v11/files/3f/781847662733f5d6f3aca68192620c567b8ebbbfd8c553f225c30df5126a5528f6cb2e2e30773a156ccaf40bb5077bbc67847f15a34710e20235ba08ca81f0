@@ -1,0 +1,559 @@
+import type { MaybePromise } from './internal/types.js';
+export type StoreItemMap = Record<string, unknown>;
+/**
+ * Describes the outcome of an atomic {@link Update} callback.
+ *
+ * - `noop` — leave the stored value unchanged.
+ * - `set`  — write `value` for the key.
+ * - `delete` — remove the key.
+ *
+ * Every variant carries a `result` that is forwarded to the caller.
+ */
+export type Change<value, result> = {
+    op: 'noop';
+    result: result;
+} | {
+    op: 'set';
+    value: value;
+    result: result;
+} | {
+    op: 'delete';
+    result: result;
+};
+/**
+ * Atomic read-modify-write for a single key.
+ *
+ * `fn` receives the current value (or `null`) and returns a {@link Change}
+ * describing the write to perform. Implementations may retry `fn`, so it
+ * must be synchronous and free of side effects.
+ */
+export type Update<itemMap extends StoreItemMap = StoreItemMap> = <key extends keyof itemMap & string, result>(key: key, fn: (current: itemMap[key] | null) => Change<itemMap[key], result>) => Promise<result>;
+/** Attempts to atomically record first use of a replay key. Must reject expires <= Date.now() inside the atomic operation. */
+export type TryClaim<itemMap extends StoreItemMap = StoreItemMap> = <key extends keyof itemMap & string>(key: key, expires: number) => MaybePromise<boolean>;
+/** Persisted marker used by the {@link tryClaim} fallback. */
+export type ReplayMarker = {
+    expires: number;
+    type: 'mppx:replay';
+};
+/** Base key-value actions available on every {@link Store}. */
+export type StoreActions<itemMap extends StoreItemMap = StoreItemMap> = {
+    get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>;
+    put: <key extends keyof itemMap & string>(key: key, value: itemMap[key]) => Promise<void>;
+    delete: <key extends keyof itemMap & string>(key: key) => Promise<void>;
+};
+/** Atomic actions that can be provided via the `extended` slot. */
+export type AtomicActions<itemMap extends StoreItemMap = StoreItemMap> = {
+    update: Update<itemMap>;
+    /** Optional single-operation fast path for recording expiring replay keys. */
+    tryClaim?: TryClaim<itemMap> | undefined;
+};
+/**
+ * Async key-value store.
+ *
+ * The second generic `extended` accumulates additional capabilities
+ * (like {@link AtomicActions}) without structural patching.
+ */
+export type Store<itemMap extends StoreItemMap = StoreItemMap, extended extends Record<string, unknown> | undefined = undefined> = StoreActions<itemMap> & (extended extends Record<string, unknown> ? extended : unknown);
+/**
+ * A {@link Store} whose atomic {@link Update} method is guaranteed to exist.
+ *
+ * Use this when atomicity is required (e.g., replay protection, channel
+ * deductions). Factory functions return `AtomicStore` when the backing
+ * adapter provides an `update` implementation.
+ *
+ * Equivalent to `Store<itemMap, AtomicActions<itemMap>>`.
+ */
+export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<itemMap, AtomicActions<itemMap>>;
+/**
+ * Attempts to atomically record first use of a replay key through its expiry.
+ *
+ * Returns `true` when this call recorded the key and `false` when it was already
+ * recorded and unexpired, or the proposed expiry has passed. `expires` is a Unix timestamp in milliseconds.
+ * Uses the adapter's optimized primitive when available and otherwise falls
+ * back to {@link AtomicStore.update}.
+ */
+export declare function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap & string>(store: AtomicStore<itemMap>, key: key, expires: number): MaybePromise<boolean>;
+/** Options shared by store constructors. */
+export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined;
+};
+/** Creates a {@link Store} from an existing implementation. */
+export declare function from<store extends AtomicStore<any>>(store: store, options?: Options): store;
+export declare function from<store extends Store<any>>(store: store, options?: Options): store;
+/** Wraps a Cloudflare KV namespace. */
+export declare function cloudflare(kv: cloudflare.AtomicParameters, options?: cloudflare.Options): AtomicStore;
+export declare function cloudflare(kv: cloudflare.Parameters, options?: cloudflare.Options): Store;
+export declare namespace cloudflare {
+    type Options = {
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+    };
+    type Parameters = {
+        get: (key: string) => Promise<unknown>;
+        put: (key: string, value: string) => Promise<void>;
+        delete: (key: string) => Promise<void>;
+        update?: <result>(key: string, fn: (current: string | null) => Change<string, result>) => Promise<result>;
+    };
+    type AtomicParameters = Omit<Parameters, 'update'> & {
+        update: NonNullable<Parameters['update']>;
+    };
+}
+/**
+ * Atomic store backed by Cloudflare Durable Objects.
+ *
+ * Each key lives in its own Durable Object instance (`idFromName(key)`; a key named
+ * like a replay shard, `mppx:replay:v<version>:<shard>`, or starting with `mppx:key:`
+ * uses `mppx:key:<key>`), so
+ * reads and writes of one key are linearizable across every Worker isolate and
+ * location, while different keys (such as different payment channels) scale
+ * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
+ * commits with a compare-and-swap in the object. When another writer changed
+ * the key in between, the swap returns the stored value and the update retries
+ * from it after a jittered backoff; {@link AtomicStore.tryClaim} runs in a single
+ * object call.
+ *
+ * Bind {@link DurableObjectStore} as a SQLite-backed Durable Object and pass
+ * its namespace. With `transport: 'rpc'`, the store calls the object's methods
+ * over Workers RPC instead of `fetch`, and `encoding: 'native'` then stores
+ * values as structured-clone values instead of JSON text.
+ *
+ * @example
+ * ```ts
+ * import { Store } from 'mppx/server'
+ *
+ * export class MppxStore extends Store.DurableObjectStore {}
+ *
+ * export default {
+ *   fetch(request: Request, env: Env) {
+ *     const store = Store.durableObject(env.MPPX_STORE)
+ *     // ...
+ *   },
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { DurableObject } from 'cloudflare:workers'
+ * import { Store } from 'mppx/server'
+ *
+ * // Workers RPC needs a class that extends `DurableObject`.
+ * export class MppxStore extends Store.DurableObjectStore.rpc(DurableObject) {}
+ *
+ * const store = Store.durableObject(env.MPPX_STORE, { transport: 'rpc', encoding: 'native' })
+ * ```
+ */
+export declare function durableObject(namespace: durableObject.Namespace, options?: durableObject.Options): AtomicStore;
+export declare namespace durableObject {
+    type Options = {
+        /**
+         * How values are stored. `json` stores JSON text (bigints as ox encodes them);
+         * `native` stores structured-clone values, so bigints and nested objects stay
+         * intact and values written directly with `storage.put` read back. `native`
+         * requires `transport: 'rpc'`. Stored values don't record their encoding, so keep
+         * one encoding per namespace (or `keyPrefix`): a `native` store reads `json` values
+         * as their JSON text, and `json` clients cannot read what it writes. @default 'json'
+         */
+        encoding?: Encoding | undefined;
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+        /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
+        maxAttempts?: number | undefined;
+        /**
+         * Spreads replay claims ({@link AtomicStore.tryClaim}) over this many shard
+         * objects, named `mppx:replay:v<version>:<shard>` by an FNV-1a hash of the
+         * key, instead of one object per key: each shard holds its claims in a SQLite
+         * table (`mppx_replay_claims`) and clears expired ones with an alarm, so short-lived claims leave no
+         * objects behind. The class must be SQLite-backed. Claims then live only in
+         * the shards: `get` and `update` of a claimed key don't see them, a value
+         * stored at the key doesn't block a claim (mppx stores only expiring claims
+         * at its replay keys), and `delete` releases them. Changing the count moves keys between shards, so
+         * bump `replayShardVersion` with it to start from empty shards. A claim lives
+         * only where it was made: enabling sharding, changing the count or version, or
+         * running two settings side by side lets a key claimed under the old setting
+         * be claimed again until that claim expires. Change it when no unexpired
+         * claim matters, such as together with the secret that signs Challenges.
+         * Shards are objects of the bound class, so a subclass's `alarm`, handlers and
+         * constructor run in them too: skip the subclass's own work there with
+         * {@link DurableObjectStore.isReplayShard}, and never clear a shard's storage.
+         */
+        replayShards?: number | undefined;
+        /** Version in the shard objects' names, to start a fresh set of shards. @default 1 */
+        replayShardVersion?: number | undefined;
+        /**
+         * How the store calls the object: `fetch` requests, or Workers RPC method
+         * calls, which need the class from {@link DurableObjectStore.rpc}. @default 'fetch'
+         */
+        transport?: 'fetch' | 'rpc' | undefined;
+    };
+    /** How {@link durableObject} stores values: JSON text or structured-clone values. */
+    type Encoding = 'json' | 'native';
+    /** The Durable Object namespace binding of a {@link DurableObjectStore} class. */
+    type Namespace = {
+        idFromName: (name: string) => unknown;
+        get: (id: any) => {
+            fetch: (input: string, init: RequestInit) => Promise<Response>;
+        };
+    };
+}
+/**
+ * Durable Object class that holds the values of {@link durableObject}.
+ *
+ * Export a subclass of it from your Worker and bind it in
+ * `wrangler.jsonc` with a `new_sqlite_classes` migration. It needs no
+ * `cloudflare:workers` import, so it bundles anywhere; for Workers RPC, extend
+ * {@link DurableObjectStore.rpc} instead.
+ *
+ * @example
+ * ```jsonc
+ * {
+ *   "durable_objects": { "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }] },
+ *   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }]
+ * }
+ * ```
+ */
+export declare class DurableObjectStore {
+    /** The object's state (`ctx`), for subclasses that use its storage or alarms. */
+    protected state: DurableObjectStore.State;
+    /** The Worker's bindings, for subclasses. */
+    protected env: unknown;
+    /**
+     * The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}.
+     * A plain field, like `state` and `env`, so subclasses that assign `this.storage = state.storage` keep working.
+     */
+    protected storage: DurableObjectStore.Storage;
+    constructor(state: DurableObjectStore.State, env?: unknown);
+    /**
+     * Returns this class rebuilt on `base`, the `DurableObject` class from
+     * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
+     * and taking it as an argument keeps this module free of that import. Called
+     * on a subclass, it keeps the subclass's methods (such as `onWrite` and
+     * `alarm`) and static members, but not its constructor, field initializers or `#private` members,
+     * which the copied methods cannot reach: subclass the returned class, or set
+     * state up lazily in ordinary members.
+     *
+     * @example
+     * ```ts
+     * import { DurableObject } from 'cloudflare:workers'
+     *
+     * export class MppxStore extends Store.DurableObjectStore.rpc(DurableObject) {}
+     * ```
+     */
+    static rpc<store extends typeof DurableObjectStore>(this: store, base: abstract new (state: any, env: any) => object): store;
+    /**
+     * Called for every applied put, delete, swap and claim (except claims in replay shards,
+     * which live in the shard's own table), after the storage write and before the
+     * response, with the decoded values (`null` when the key is absent). When the
+     * storage has `transaction()`, the write and this hook run in one transaction,
+     * passed as `storage`: make the hook's writes and alarms
+     * through it so they commit with the store's write, and throw to roll the
+     * write back. Make only storage calls and alarms here: awaiting other I/O
+     * (`fetch`, a queue send) opens the object's input gate before the write
+     * commits, so a concurrent swap or claim could act on the old value. Do that
+     * work from {@link DurableObjectStore.alarm} instead. Does nothing by default.
+     */
+    protected onWrite(_key: string, _previous: unknown | null, _next: unknown | null, _storage: DurableObjectStore.Storage): void | Promise<void>;
+    /**
+     * Handles the object's alarm, which a subclass sets through
+     * {@link DurableObjectStore.storage}. In a replay shard it clears expired claims, so
+     * a subclass that overrides it must call `super.alarm()`, or expired claims stay stored.
+     * Elsewhere, including on key-value-backed objects, it does nothing. The subclass's own
+     * alarm work runs in shards too: skip it there with {@link DurableObjectStore.isReplayShard}.
+     *
+     * @example
+     * ```ts
+     * override async alarm() {
+     *   await super.alarm()
+     *   if (this.isReplayShard()) return
+     *   // The subclass's own work.
+     * }
+     * ```
+     */
+    alarm(): Promise<void>;
+    /**
+     * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
+     * object of the same class that holds only replay claims, in its own SQL table. A
+     * subclass skips its own work there, and must not clear its storage. It tells by the
+     * object's whole name (`mppx:replay:v<version>:<shard>`) where the runtime gives it (`ctx.id.name`, so it
+     * works in the constructor of a fresh shard), and otherwise by the claims table, which a
+     * shard creates on its first claim.
+     */
+    protected isReplayShard(): boolean;
+    /** Whether this object holds the replay claims table, which a shard creates on its first claim. */
+    private hasReplayClaims;
+    /**
+     * Claims `key` until `expires` in this replay shard, unless it holds an
+     * unexpired claim: one `INSERT … ON CONFLICT DO UPDATE … WHERE` statement, so
+     * concurrent claims have exactly one winner. Schedules the alarm that clears it.
+     */
+    claimReplay(key: string, expires: number): Promise<boolean>;
+    /** Releases `key`'s claim in this replay shard, if it has one. */
+    releaseReplay(key: string): Promise<void>;
+    /** Reads a key: its JSON text, or its stored value with `native` encoding. */
+    storeGet(key: string, _encoding?: durableObject.Encoding): Promise<unknown>;
+    /** Writes a key: JSON text, or any structured-clone value with `native` encoding. */
+    storePut(key: string, value: unknown, encoding?: durableObject.Encoding): Promise<void>;
+    /** Deletes a key. */
+    storeDelete(key: string, encoding?: durableObject.Encoding): Promise<void>;
+    /**
+     * Writes `value` (or deletes, for `null`) only if the key holds `expected`:
+     * the same JSON text, or with `native` encoding a structurally equal value.
+     * It reads and writes without awaiting other I/O in between, so the object's
+     * input gate makes it atomic.
+     */
+    storeSwap(key: string, expected: unknown, value: unknown, encoding?: durableObject.Encoding): Promise<DurableObjectStore.SwapResult<unknown>>;
+    /** Records a replay marker until `expires` unless the key holds a value or an unexpired marker. */
+    storeClaim(key: string, expires: number, encoding?: durableObject.Encoding): Promise<boolean>;
+    /** Handles one store operation sent by `fetch`, as JSON text. */
+    fetch(request: Request): Promise<Response>;
+    /** The replay shard's claims table, created on first use. */
+    private replayClaims;
+    /** Writes or deletes (`null`) a key and runs {@link DurableObjectStore.onWrite}. `previous` is the value the caller already read, if any. */
+    private commit;
+}
+export declare namespace DurableObjectStore {
+    /** The subset of `DurableObjectState` the store uses. */
+    type State = {
+        /** The object's ID; `name` is set for objects addressed with `idFromName`. */
+        id?: {
+            readonly name?: string | undefined;
+        } | undefined;
+        storage: Storage;
+    };
+    /** The subset of `DurableObjectStorage` the store uses. */
+    type Storage = {
+        get: (key: string) => Promise<unknown>;
+        put(key: string, value: unknown): Promise<void>;
+        delete: (key: string) => Promise<unknown>;
+        /** The scheduled alarm time in milliseconds, or `null`. */
+        getAlarm?: (() => Promise<number | null>) | undefined;
+        /** Schedules the object's alarm, replacing any earlier one. */
+        setAlarm?: ((scheduledTime: number | Date) => Promise<void>) | undefined;
+        /** Cancels the object's alarm. */
+        deleteAlarm?: (() => Promise<void>) | undefined;
+        /** Runs `closure` in a transaction that rolls back when it throws. */
+        transaction?<result>(closure: (txn: Storage) => Promise<result>): Promise<result>;
+        /** The object's SQLite database, on SQLite-backed objects: replay shards need it. */
+        sql?: Sql | undefined;
+    };
+    /** The subset of `SqlStorage` replay shards use. */
+    type Sql = {
+        exec: (query: string, ...bindings: unknown[]) => {
+            toArray: () => Record<string, unknown>[];
+        };
+    };
+    /** A replay shard's methods that {@link durableObject} calls over Workers RPC. */
+    type ReplayShard = {
+        claimReplay: (key: string, expires: number) => Promise<boolean>;
+        releaseReplay: (key: string) => Promise<unknown>;
+    };
+    /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
+    type SwapResult<value = string | null> = {
+        applied: true;
+    } | {
+        applied: false;
+        current: value;
+    };
+    /** The object's methods that {@link durableObject} calls, positionally, over Workers RPC. */
+    type Stub = {
+        storeGet: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>;
+        storePut: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>;
+        storeDelete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>;
+        storeSwap: (key: string, expected: unknown, value: unknown, encoding?: durableObject.Encoding) => Promise<SwapResult<unknown>>;
+        storeClaim: (key: string, expires: number, encoding?: durableObject.Encoding) => Promise<boolean>;
+    };
+    /** An operation sent from {@link durableObject} to the object. */
+    type Request = {
+        op: 'get';
+        key: string;
+    } | {
+        op: 'put';
+        key: string;
+        value: string;
+    } | {
+        op: 'delete';
+        key: string;
+    } | {
+        op: 'swap';
+        key: string;
+        expected: string | null;
+        value: string | null;
+    } | {
+        op: 'claim';
+        key: string;
+        expires: number;
+    } | {
+        op: 'claimReplay';
+        key: string;
+        expires: number;
+    } | {
+        op: 'releaseReplay';
+        key: string;
+    };
+}
+/**
+ * Atomic store backed by a SQL database: Postgres, SQLite or Cloudflare D1.
+ *
+ * Values live as JSON text in one table (`mppx_store` by default, created on
+ * first use). Every write is a single statement, and {@link AtomicStore.update}
+ * commits with a compare-and-swap on the stored value
+ * (`UPDATE … WHERE key = ? AND value = ? RETURNING`, or
+ * `INSERT … ON CONFLICT DO NOTHING RETURNING` for a new key), retrying from the
+ * current value after a jittered backoff when another writer won. It needs no
+ * interactive transactions, so it works over HTTP drivers and D1, and only
+ * `ON CONFLICT` and `RETURNING` (Postgres, SQLite 3.35+, D1, libSQL).
+ *
+ * Use {@link postgres}, {@link sqlite} or {@link d1} for common drivers, or pass
+ * any driver as a `query` function.
+ *
+ * @example
+ * ```ts
+ * import postgres from 'postgres'
+ * import { Store } from 'mppx/server'
+ *
+ * const db = postgres(process.env.DATABASE_URL!)
+ * const store = Store.sql({ dialect: 'postgres', query: (text, params) => db.unsafe(text, params) })
+ * ```
+ */
+export declare function sql(driver: sql.Driver, options?: sql.Options): AtomicStore;
+export declare namespace sql {
+    type Options = {
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+        /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
+        maxAttempts?: number | undefined;
+        /** Table holding the values, optionally schema-qualified. @default 'mppx_store' */
+        table?: string | undefined;
+        /** Create the table on first use (`CREATE TABLE IF NOT EXISTS`). Set `false` when migrations create it. @default true */
+        createTable?: boolean | undefined;
+    };
+    /** A result row. */
+    type Row = Record<string, unknown>;
+    /** Runs one statement with positional parameters and returns its rows. */
+    type Driver = {
+        /** Placeholder style: Postgres numbers them (`$1`), SQLite and D1 use `?`. */
+        dialect: 'postgres' | 'sqlite';
+        query: (sql: string, params: unknown[]) => Promise<Row[]>;
+    };
+}
+/**
+ * Atomic SQL store on a Postgres client: `pg` (`Pool` or `Client`),
+ * `@neondatabase/serverless` (`Pool` or `neon()`), `@vercel/postgres`,
+ * Supabase's Postgres connection or PGlite. See {@link sql}.
+ *
+ * @example
+ * ```ts
+ * import { Pool } from 'pg'
+ * import { Store } from 'mppx/server'
+ *
+ * const store = Store.postgres(new Pool({ connectionString: process.env.DATABASE_URL }))
+ * ```
+ */
+export declare function postgres(client: postgres.Client, options?: sql.Options): AtomicStore;
+export declare namespace postgres {
+    /** Any client with `query(text, values)` that resolves to `{ rows }` or to the rows. */
+    type Client = {
+        query: (text: string, values: unknown[]) => Promise<{
+            rows: sql.Row[];
+        } | sql.Row[]>;
+    };
+}
+/**
+ * Atomic SQL store on a SQLite database: `node:sqlite` (`DatabaseSync`),
+ * `better-sqlite3` or `bun:sqlite`. See {@link sql}. For libSQL or Turso, use
+ * {@link sql} with dialect `sqlite` and return the result set's rows:
+ * `Store.sql({ dialect: 'sqlite', query: async (sql, args) => (await client.execute({ sql, args: args as InArgs })).rows })`.
+ *
+ * @example
+ * ```ts
+ * import { DatabaseSync } from 'node:sqlite'
+ * import { Store } from 'mppx/server'
+ *
+ * const store = Store.sqlite(new DatabaseSync('mppx.db'))
+ * ```
+ */
+export declare function sqlite(database: sqlite.Database, options?: sql.Options): AtomicStore;
+export declare namespace sqlite {
+    /** A database whose prepared statements run with `all(...params)`, or `run(...params)` when better-sqlite3 marks them as returning no rows. */
+    type Database = {
+        prepare: (sql: string) => {
+            all: (...params: any[]) => unknown;
+            run?: ((...params: any[]) => unknown) | undefined;
+            /** better-sqlite3: whether the statement returns rows. */
+            reader?: boolean | undefined;
+        };
+    };
+}
+/**
+ * Atomic SQL store on a Cloudflare D1 database binding. See {@link sql}.
+ *
+ * @example
+ * ```ts
+ * import { Store } from 'mppx/server'
+ *
+ * export default {
+ *   fetch(request: Request, env: { DB: D1Database }) {
+ *     const store = Store.d1(env.DB)
+ *     // ...
+ *   },
+ * }
+ * ```
+ */
+export declare function d1(database: d1.Database, options?: sql.Options): AtomicStore;
+export declare namespace d1 {
+    /** The subset of `D1Database` the store uses. */
+    type Database = {
+        prepare: (sql: string) => {
+            bind: (...values: any[]) => {
+                all: () => Promise<{
+                    results: unknown[];
+                }>;
+            };
+        };
+    };
+}
+/** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */
+export declare function memory(options?: memory.Options): AtomicStore;
+export declare namespace memory {
+    type Options = {
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+    };
+}
+/** Wraps a standard Redis client (ioredis, node-redis, Valkey). */
+export declare function redis(client: redis.AtomicParameters, options?: redis.Options): AtomicStore;
+export declare function redis(client: redis.Parameters, options?: redis.Options): Store;
+export declare namespace redis {
+    type Options = {
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+    };
+    type Parameters = {
+        get: (key: string) => Promise<string | null>;
+        set: (key: string, value: string) => Promise<unknown>;
+        del: (key: string) => Promise<unknown>;
+        update?: <result>(key: string, fn: (current: string | null) => Change<string, result>) => Promise<result>;
+    };
+    type AtomicParameters = Omit<Parameters, 'update'> & {
+        update: NonNullable<Parameters['update']>;
+    };
+}
+/** Wraps an Upstash Redis instance (e.g. Vercel KV). */
+export declare function upstash(redis: upstash.AtomicParameters, options?: upstash.Options): AtomicStore;
+export declare function upstash(redis: upstash.Parameters, options?: upstash.Options): Store;
+export declare namespace upstash {
+    type Options = {
+        /** Prefix prepended to every backing store key. */
+        keyPrefix?: string | undefined;
+    };
+    type Parameters = {
+        get: (key: string) => Promise<unknown>;
+        set: (key: string, value: unknown) => Promise<unknown>;
+        del: (key: string) => Promise<unknown>;
+        update?: <result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) => Promise<result>;
+    };
+    type AtomicParameters = Omit<Parameters, 'update'> & {
+        update: NonNullable<Parameters['update']>;
+    };
+}
+//# sourceMappingURL=Store.d.ts.map

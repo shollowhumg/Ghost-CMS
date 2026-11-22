@@ -1,0 +1,4 @@
+/** Normalizes slugs, treating null or omitted values as an empty string. */
+export declare function safe(string?: string | null, options?: {
+    importing?: boolean;
+}): string;

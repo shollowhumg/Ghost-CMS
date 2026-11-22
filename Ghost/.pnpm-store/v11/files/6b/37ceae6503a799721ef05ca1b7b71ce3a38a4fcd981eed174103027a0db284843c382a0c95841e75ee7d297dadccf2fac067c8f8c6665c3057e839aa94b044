@@ -1,0 +1,14 @@
+import { z } from 'zod';
+/**
+ * A key a manifest names. A manifest is public, so a key that includes its private part
+ * is refused with a message of its own: it has to be replaced, not just removed. Other
+ * members are refused by name, as key tools often add some, such as `kid` or `alg`.
+ */
+export declare const publicKeyField: z.ZodObject<{
+    kty: z.ZodLiteral<"OKP">;
+    crv: z.ZodLiteral<"Ed25519">;
+    x: z.ZodString;
+}, z.core.$strict>;
+/** A public Ed25519 key as a JWK (RFC 8037), with nothing but the members it needs. */
+export type PublicKeyJwk = z.infer<typeof publicKeyField>;
+//# sourceMappingURL=keys.d.ts.map

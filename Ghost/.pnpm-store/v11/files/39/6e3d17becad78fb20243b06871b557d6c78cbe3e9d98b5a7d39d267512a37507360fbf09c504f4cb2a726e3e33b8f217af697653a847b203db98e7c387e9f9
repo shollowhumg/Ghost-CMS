@@ -1,0 +1,43 @@
+import { Cli } from 'incur';
+/** Resolves a credential retry without allowing an MPP challenge redirect to change origins. */
+export declare function resolveMppCredentialTarget(initialUrl: string, _initialTarget: {
+    host?: string | undefined;
+    url: string;
+}, responseUrl: string): {
+    host?: string | undefined;
+    url: string;
+};
+declare const cli: Cli.Cli<{
+    mppx: {
+        args: {
+            url: string;
+        };
+        options: {
+            account?: string | undefined;
+            autoSwap?: boolean | undefined;
+            config?: string | undefined;
+            confirm: boolean;
+            currency?: string | undefined;
+            data?: string | undefined;
+            fail?: boolean | undefined;
+            header?: string[] | undefined;
+            include?: boolean | undefined;
+            insecure?: boolean | undefined;
+            jsonBody?: string | undefined;
+            location?: boolean | undefined;
+            method?: string | undefined;
+            methodOpt?: string[] | undefined;
+            network?: "mainnet" | "testnet" | undefined;
+            payWith?: string | undefined;
+            protocol: "auto" | "mpp" | "x402";
+            rpcUrl?: string | undefined;
+            session: string;
+            silent: boolean;
+            slippage?: number | undefined;
+            userAgent?: string | undefined;
+            verbose: number;
+        };
+    };
+}, undefined, undefined, undefined, "mppx">;
+export default cli;
+//# sourceMappingURL=cli.d.ts.map

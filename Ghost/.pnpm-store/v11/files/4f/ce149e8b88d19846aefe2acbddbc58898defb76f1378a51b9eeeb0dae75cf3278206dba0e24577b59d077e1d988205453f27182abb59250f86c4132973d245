@@ -1,0 +1,14 @@
+import { z } from 'zod';
+/**
+ * The longest path an app may report. Admin puts the path in its own URL, so the limit stays
+ * well below what browsers and proxies accept for a whole URL.
+ */
+export declare const APP_PATH_MAX_LENGTH = 2048;
+export declare const AppPathSchema: z.ZodPipe<z.ZodPipe<z.ZodString & z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>, z.ZodTransform<string, string>>, z.ZodString & z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>>;
+export type AppPath = z.output<typeof AppPathSchema>;
+/** How Admin records an app's move: see `PathMove`. */
+export declare const PathMoveSchema: z.ZodEnum<{
+    push: "push";
+    replace: "replace";
+}>;
+//# sourceMappingURL=paths.d.ts.map

@@ -1,0 +1,32 @@
+import { base64url, calculateJwkThumbprint } from 'jose';
+/**
+ * A key's RFC 7638 thumbprint: the same for a key however its JWK is written, so it is
+ * what Ghost stores to recognise a key again.
+ */
+export function thumbprintOf(key) {
+    return calculateJwkThumbprint({ kty: key.kty, crv: key.crv, x: key.x }, 'sha256');
+}
+export function decodeUtf8(bytes) {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+export function decodeText(encoded) {
+    try {
+        return decodeUtf8(base64url.decode(encoded));
+    }
+    catch {
+        return undefined;
+    }
+}
+export function decodeJson(encoded) {
+    const text = decodeText(encoded);
+    if (text === undefined) {
+        return undefined;
+    }
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        return undefined;
+    }
+}
+//# sourceMappingURL=keys.js.map

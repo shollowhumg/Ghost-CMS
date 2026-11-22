@@ -1,0 +1,37 @@
+import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js';
+import { Constants } from '../Constants.js';
+/**
+ * Creates a TAP identity prover.
+ *
+ * The prover signs each in-scope attempt, including MPP payment retries, with
+ * an RFC 9421 HTTP message signature carrying TAP's `agent-browser-auth` or
+ * `agent-payer-auth` tag.
+ *
+ * @example
+ * ```ts
+ * Mppx.create({ identity: [Tap.Client.prover({ intent: 'payment', key, keyId, scope: ['https://shop.example'] })], methods })
+ * ```
+ */
+export function prover(config) {
+    const tag = config.intent === Constants.intents.payment ? Constants.tags.payment : Constants.tags.browse;
+    const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime;
+    if (!Number.isInteger(expiresIn) ||
+        expiresIn <= 0 ||
+        expiresIn > Constants.maximumSignatureLifetime)
+        throw new RangeError(`TAP expiresIn must be an integer from 1 to ${Constants.maximumSignatureLifetime}.`);
+    return {
+        scope: config.scope,
+        prove(request, context) {
+            return HttpMessageSignature.sign(request, {
+                components: Constants.requiredComponents,
+                context,
+                expiresIn,
+                key: config.key,
+                keyId: config.keyId,
+                label: config.label ?? Constants.label,
+                tag,
+            });
+        },
+    };
+}
+//# sourceMappingURL=index.js.map

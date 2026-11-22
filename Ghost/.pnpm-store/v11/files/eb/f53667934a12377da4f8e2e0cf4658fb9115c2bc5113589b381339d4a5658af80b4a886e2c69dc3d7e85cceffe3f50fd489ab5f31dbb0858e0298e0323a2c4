@@ -1,0 +1,11 @@
+import { z } from 'zod';
+import type { UrlField } from './url.ts';
+/**
+ * What an app asks for: the places in Ghost it wants to appear. Each surface type is one
+ * entry in a union, so a new one is added here and nowhere else.
+ */
+export declare function surfacesField(url: UrlField): z.ZodArray<z.ZodDiscriminatedUnion<readonly [z.ZodObject<{
+    type: z.ZodLiteral<"admin_page">;
+    url: z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+}, z.core.$strict>], "type">>;
+//# sourceMappingURL=surfaces.d.ts.map

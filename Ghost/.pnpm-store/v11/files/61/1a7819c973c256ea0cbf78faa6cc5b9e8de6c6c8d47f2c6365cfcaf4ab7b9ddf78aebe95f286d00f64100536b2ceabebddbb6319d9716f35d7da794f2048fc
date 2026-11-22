@@ -1,0 +1,11 @@
+/** Adds fresh issuance randomness while preserving application and route metadata. */
+export declare function withNonce(meta: Record<string, string> | undefined): Record<string, string>;
+/** Returns fresh randomness for an identity nonce. */
+export declare function createNonce(): string;
+/** Adds an identity nonce to challenge metadata. */
+export declare function withIdentity(meta: Record<string, string> | undefined, nonce: string | undefined): Record<string, string> | undefined;
+/** Reads the identity nonce from challenge metadata. */
+export declare function identity(meta: Record<string, string> | undefined): string | undefined;
+/** Removes issuance-only metadata when comparing stable route requirements. */
+export declare function routeMeta(meta: Record<string, string> | undefined): Record<string, string> | undefined;
+//# sourceMappingURL=challengeMeta.d.ts.map

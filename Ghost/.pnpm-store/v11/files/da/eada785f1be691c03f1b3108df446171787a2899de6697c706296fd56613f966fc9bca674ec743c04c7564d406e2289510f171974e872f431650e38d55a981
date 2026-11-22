@@ -1,0 +1,52 @@
+{
+  "name": "@tryghost/kg-default-cards",
+  "version": "10.3.11",
+  "description": "Mobiledoc card definitions for Ghost's editor",
+  "license": "MIT",
+  "author": "Ghost Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/Ghost.git",
+    "directory": "koenig/kg-default-cards"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "build",
+    "!build/**/*.tsbuildinfo"
+  ],
+  "main": "build/cjs/index.js",
+  "module": "build/esm/index.js",
+  "types": "build/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/esm/index.d.ts",
+      "import": "./build/esm/index.js",
+      "require": "./build/cjs/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@tryghost/kg-markdown-html-renderer": "~7.2.12",
+    "@tryghost/kg-utils": "~1.1.10",
+    "@tryghost/string": "0.3.9",
+    "@tryghost/url-utils": "5.5.0",
+    "handlebars": "4.7.10",
+    "juice": "11.1.1",
+    "luxon": "3.7.2"
+  },
+  "engines": {
+    "node": "^22.13.1 || ^24.0.0"
+  },
+  "scripts": {
+    "dev": "echo \"Implement me!\"",
+    "build": "tsc && tsc -p tsconfig.cjs.json && echo '{\"type\":\"module\"}' > build/esm/package.json",
+    "test": "pnpm run '/^test:/'",
+    "test:unit": "NODE_ENV=testing vitest run --coverage",
+    "test:types": "tsc -p tsconfig.test.json",
+    "lint": "eslint --cache .",
+    "posttest": "pnpm lint"
+  }
+}

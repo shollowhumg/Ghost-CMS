@@ -1,0 +1,21 @@
+/**
+ * The contracts between Ghost and apps.
+ *
+ * Each contract is its own entry point (`@tryghost/app-contracts/manifest`,
+ * `@tryghost/app-contracts/bridge`, and later cards and live frames), so a consumer only
+ * loads the one it uses.
+ *
+ * This root entry point holds what every consumer can afford: types, and the rules that
+ * depend on nothing. It must stay free of zod, because some consumers ship to browsers
+ * that never validate anything. Validation lives in the contract's own entry point.
+ */
+export { APP_FAILURE_CODES, OUTDATED_REVIEW_CODES, isAppFailureCode, isOutdatedReviewCode, } from './failure-codes.js';
+export { UNCONFIRMED_APP_CODES, isUnconfirmedAppCode, } from './identity/codes.js';
+export { isGhostHost } from './manifest/ghost-host.js';
+export { APP_ID_MAX_LENGTH, isValidAppId } from './manifest/id.js';
+export { URL_MAX_LENGTH } from './manifest/limits.js';
+export { isLocalhost } from './manifest/localhost.js';
+export { isPlainText, toPlainText } from './plain-text.js';
+export { appPageUrl, servedFrom } from './manifest/served-from.js';
+export { APP_ERROR_CODES, ARGUMENT_MESSAGES, BRIDGE_ERROR_CODES, CONNECT_MESSAGE_TYPE, FETCH_METHODS, FETCH_RESPONSE_STATUS_MAX, FETCH_RESPONSE_STATUS_MIN, HELLO_MESSAGE_TYPE, HOST_ERROR_CODES, START_TIMEOUT_MS, TITLE_MAX_LENGTH, decodeBridgeError, encodeBridgeError, isConnectMessage, isContainedPath, isFetchResponse, isRecord, isReservedRequestHeader, isStartContext, isTheme, methodAllowsBody, normaliseAppPath, } from './bridge/rules.js';
+//# sourceMappingURL=index.js.map

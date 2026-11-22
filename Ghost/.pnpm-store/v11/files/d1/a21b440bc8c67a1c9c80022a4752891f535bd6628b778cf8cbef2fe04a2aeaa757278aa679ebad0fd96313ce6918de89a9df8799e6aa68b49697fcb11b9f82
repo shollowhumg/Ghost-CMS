@@ -1,0 +1,15 @@
+/**
+ * The publisher confirmed a review that's out of date. A changed manifest or installation
+ * carries the current review in the error's details when Ghost has one.
+ */
+export declare const OUTDATED_REVIEW_CODES: readonly ['APP_MANIFEST_CHANGED', 'APP_INSTALLATION_CHANGED', 'APP_ALREADY_INSTALLED', 'APP_INSTALLATION_UNINSTALLED'];
+/**
+ * Admin can only explain a code listed here; any other shows as an unknown error. A Ghost
+ * core test checks the list against the codes the app installations service throws.
+ */
+export declare const APP_FAILURE_CODES: readonly ["APP_MANIFEST_UNREACHABLE", "APP_CHALLENGE_UNREACHABLE", "APP_MANIFEST_URL_MISMATCH", "APP_MANIFEST_SIGNATURE_INVALID", "APP_IDENTITY_MISMATCH", "APP_BACKEND_KEY_RETIRED", "APP_CHALLENGE_FAILED", "APP_MANIFEST_URL_INVALID", "APP_MANIFEST_REDIRECTED", "APP_MANIFEST_TOO_LARGE", "APP_MANIFEST_NOT_JSON", "APP_MANIFEST_UNSIGNED", "APP_MANIFEST_INVALID", "APP_MANIFEST_OTHER_APP", "APP_MANIFEST_CHANGED", "APP_INSTALLATION_CHANGED", "APP_ALREADY_INSTALLED", "APP_INSTALLATION_UNINSTALLED", "APP_NOT_INSTALLED", "APP_UNAVAILABLE"];
+export type AppFailureCode = (typeof APP_FAILURE_CODES)[number];
+/** Unlike `code in table`, false for names every object has, such as `constructor`. */
+export declare function isAppFailureCode(code: unknown): code is AppFailureCode;
+export declare function isOutdatedReviewCode(code: unknown): code is (typeof OUTDATED_REVIEW_CODES)[number];
+//# sourceMappingURL=failure-codes.d.ts.map

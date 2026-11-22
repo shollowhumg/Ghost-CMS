@@ -1,0 +1,15 @@
+export type Mailbox = {
+    /** The email address */
+    address: string;
+    /** Optional name associated with the email */
+    name?: string;
+};
+/**
+ * Parse one mailbox without validating or normalizing its address.
+ * @param email Email string to parse
+ * @returns Parsed mailbox, or null for empty input, lists and groups
+ */
+export declare const parseMailbox: (email: string) => null | Mailbox;
+/** Format mailbox text without validation, normalization or delivery workarounds. */
+export declare const formatMailbox: (mailbox: Readonly<Mailbox>) => string;
+//# sourceMappingURL=mailbox.d.ts.map

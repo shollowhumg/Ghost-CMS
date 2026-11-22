@@ -1,0 +1,146 @@
+import { Elysia } from 'elysia';
+import { mapResponse as mapElysiaResponse } from 'elysia/adapter/web-standard/handler';
+import { generate } from '../discovery/OpenApi.js';
+import * as Scope from '../server/internal/scope.js';
+import * as Mppx_core from '../server/Mppx.js';
+import * as Mppx_internal from './internal/mppx.js';
+export * from '../server/Methods.js';
+export var Mppx;
+(function (Mppx) {
+    /**
+     * Creates an Elysia-aware payment handler where each intent
+     * returns Elysia lifecycle hooks.
+     *
+     * Use with `.guard()` so both verification and response wrapping are scoped
+     * to the same routes.
+     *
+     * @example
+     * ```ts
+     * import { Elysia } from 'elysia'
+     * import { Mppx, tempo } from 'mppx/elysia'
+     *
+     * const mppx = Mppx.create({ methods: [tempo()] })
+     *
+     * const app = new Elysia()
+     *   .guard(
+     *     mppx.charge({ amount: '1' }),
+     *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
+     *   )
+     * ```
+     */
+    function create(config) {
+        return Mppx_internal.wrap(Mppx_core.create(config), payment);
+    }
+    Mppx.create = create;
+})(Mppx || (Mppx = {}));
+/**
+ * Elysia lifecycle hooks that gate a route behind a payment intent.
+ *
+ * Returns a 402 challenge if no valid credential is provided.
+ *
+ * @example
+ * ```ts
+ * import { Elysia } from 'elysia'
+ * import { Mppx } from 'mppx/server'
+ * import { payment } from 'mppx/elysia'
+ *
+ * const mppx = Mppx.create({ methods: [tempo()] })
+ *
+ * const app = new Elysia()
+ *   .guard(
+ *     payment(mppx.charge, { amount: '1' }),
+ *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
+ *   )
+ * ```
+ */
+export function payment(intent, options) {
+    const pending = new WeakMap();
+    const runBeforeHandle = async ({ request, route, set }, legacyRegistration) => {
+        const scopedRequest = options.scope === undefined && Scope.read(options.meta) === undefined
+            ? Scope.attach(request, `${request.method.toUpperCase()} ${route || new URL(request.url).pathname}`)
+            : request;
+        const result = await intent(options)(scopedRequest);
+        if (result.status === 402)
+            return result.challenge;
+        const managementResponse = await getManagementResponse(result);
+        if (managementResponse)
+            return managementResponse;
+        const supportsStreamingReceipts = Mppx_core.supportsStreamingReceipts(result);
+        if (legacyRegistration) {
+            if (supportsStreamingReceipts)
+                return new Response('Streaming payment hooks require paired beforeHandle and afterHandle registration.', { status: 500 });
+            const receiptResponse = await result.withReceipt(new Response(null, { status: 204 }));
+            if (!receiptResponse.ok)
+                return receiptResponse;
+            copyHeaders(receiptResponse, set.headers);
+            return undefined;
+        }
+        pending.set(request, { result, supportsStreamingReceipts });
+        return undefined;
+    };
+    const beforeHandle = (context) => runBeforeHandle(context, false);
+    const legacyBeforeHandle = (context) => runBeforeHandle(context, true);
+    const afterHandle = async ({ request, responseValue, set }) => {
+        const entry = pending.get(request);
+        if (!entry)
+            return;
+        const { result, supportsStreamingReceipts } = entry;
+        if (isAsyncIterableResponse(responseValue)) {
+            if (supportsStreamingReceipts) {
+                const response = await result.withReceipt(responseValue);
+                pending.delete(request);
+                return response;
+            }
+            const receiptResponse = await result.withReceipt(new Response(null, { status: 204 }));
+            pending.delete(request);
+            if (!receiptResponse.ok)
+                return receiptResponse;
+            copyHeaders(receiptResponse, set.headers);
+            return responseValue;
+        }
+        const response = await mapElysiaResponse(responseValue, set, request);
+        const wrapped = await result.withReceipt(response);
+        pending.delete(request);
+        return wrapped;
+    };
+    return Object.assign(legacyBeforeHandle, { afterHandle, beforeHandle });
+}
+function isAsyncIterableResponse(response) {
+    if (typeof response === 'function')
+        return true;
+    return (typeof response === 'object' &&
+        response !== null &&
+        Symbol.asyncIterator in response &&
+        typeof response[Symbol.asyncIterator] === 'function');
+}
+function copyHeaders(response, headers) {
+    for (const [key, value] of response.headers)
+        headers[key] = value;
+}
+async function getManagementResponse(result) {
+    try {
+        return await result.withReceipt();
+    }
+    catch (error) {
+        if (Mppx_core.isMissingReceiptResponseError(error)) {
+            return null;
+        }
+        throw error;
+    }
+}
+const discoveryHeaders = { 'Cache-Control': 'public, max-age=300' };
+/**
+ * Returns an Elysia plugin that serves an OpenAPI discovery document.
+ */
+export function discovery(mppx, config = {}) {
+    const mountPath = config.path ?? '/openapi.json';
+    const cached = JSON.stringify(generate(mppx, {
+        ...(config.info ? { info: config.info } : {}),
+        routes: config.routes ?? [],
+        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    }));
+    return new Elysia().get(mountPath, () => new Response(cached, {
+        headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
+    }));
+}
+//# sourceMappingURL=elysia.js.map

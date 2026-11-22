@@ -1,0 +1,34 @@
+import type * as Types from './Types.js';
+/** Sends HTTP attempts with every in-scope prover applied. */
+export type Client = {
+    /**
+     * Proves and sends one request.
+     *
+     * Requests that carry proofs do not follow redirects: a redirect rejects
+     * (`redirect: 'error'`), so proofs never reach another URL. Requests with no
+     * prover in scope are sent unchanged. If a prover asks to retry a rejected
+     * (non-402) response, the request is proved again and resent once, except for
+     * paid attempts, which are never resent.
+     */
+    send: (fetch: typeof globalThis.fetch, request: Request, context?: Types.Context) => Promise<{
+        request: Request;
+        response: Response;
+    }>;
+    /** Lets in-scope provers prepare proofs for a 402 challenge from `url` before the payment retry. */
+    challenge: (response: Response, context: Types.Context, url: string) => Promise<void>;
+};
+/**
+ * Creates the client runner for a list of provers.
+ *
+ * Provers run in list order on every attempt, sharing one attempt context.
+ * List request signers last so their signatures cover headers added by
+ * earlier provers.
+ */
+export declare function from(provers: readonly Types.Prover[]): Client;
+/**
+ * Wraps a fetch implementation so every request is proved.
+ *
+ * Prefer `Mppx.create({ identity })`, which also passes the payment challenge to provers.
+ */
+export declare function wrapFetch(fetch: typeof globalThis.fetch, client: Client, context?: Types.Context): typeof globalThis.fetch;
+//# sourceMappingURL=Client.d.ts.map

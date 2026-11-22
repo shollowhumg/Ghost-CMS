@@ -1,0 +1,13 @@
+# Ghost CMS
+ghost-cms/
+
+# Node modules
+**/node_modules/
+
+# Environment
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
+*.log

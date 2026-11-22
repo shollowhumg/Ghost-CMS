@@ -1,0 +1,268 @@
+/**
+ * Server-side TIP-1034 precompile session payment method for request/response flows.
+ *
+ * Handles the full TIP20EscrowChannel lifecycle (open, voucher, top-up, close)
+ * and one-shot settlement. Each incoming request carries a session credential
+ * with a cumulative voucher that the server validates and records.
+ */
+import { type Address, type Hex } from 'viem';
+import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js';
+import * as Method from '../../../Method.js';
+import * as Store from '../../../Store.js';
+import * as Client from '../../../viem/Client.js';
+import * as Account from '../../internal/account.js';
+import * as FeePayer from '../../internal/fee-payer.js';
+import type * as types from '../../internal/types.js';
+import * as Methods from '../../Methods.js';
+import * as Transport from '../../server/internal/transport.js';
+import { deserializeSnapshot as deserializeSessionSnapshot, serializeSnapshot as serializeSessionSnapshot } from '../Snapshot.js';
+import * as ChannelStore from './ChannelStore.js';
+import { type ResolveSessionChannelId } from './RequestState.js';
+import { type SessionStoreInput, type SettleChargedSessionChannel } from './Settlement.js';
+import { type OnSessionSettlement, type OnSessionSettlementFailure, type SettlementSchedule } from './Settlement.js';
+import * as SponsorshipLimit from './SponsorshipLimit.js';
+import * as Ws from './Ws.js';
+/** @internal Reuses a method's escrow verifier when composing shared currency helpers. */
+export declare function verifyStream(method: object, channelId: Hex): Promise<void>;
+/** Server-side automatic settlement schedule. */
+export type { SettlementSchedule } from './Settlement.js';
+/** Server-side settlement event hook types. */
+export type { OnSessionSettlement, OnSessionSettlementFailure, SessionSettlementContext, SessionSettlementFailureContext, } from './Settlement.js';
+/** Server-side hook types for request-identity channel bootstrap. */
+export type { ResolveSessionChannelId, ResolveSessionChannelIdParameters, SessionChannelIdRequest, } from './RequestState.js';
+export { settle, settleBatch } from './Settlement.js';
+/** Creates a server-side TIP20EscrowChannel precompile session payment method. */
+export declare function session<const parameters extends session.Parameters>(p?: NoExtraKeys<parameters, session.Parameters>): Method.Server<{
+    readonly name: "tempo";
+    readonly intent: "session";
+    readonly schema: {
+        credential: {
+            payload: import("zod/mini").ZodMiniDiscriminatedUnion<[import("zod/mini").ZodMiniObject<{
+                action: import("zod/mini").ZodMiniLiteral<"open">;
+                authorizedSigner: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                channelId: import("zod/mini").ZodMiniString<string>;
+                cumulativeAmount: import("zod/mini").ZodMiniString<string>;
+                descriptor: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniCustom<import("../precompile/Protocol.js").ChannelDescriptor, import("../precompile/Protocol.js").ChannelDescriptor>>;
+                signature: import("zod/mini").ZodMiniString<string>;
+                transaction: import("zod/mini").ZodMiniString<string>;
+                type: import("zod/mini").ZodMiniLiteral<"transaction">;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                action: import("zod/mini").ZodMiniLiteral<"topUp">;
+                additionalDeposit: import("zod/mini").ZodMiniString<string>;
+                channelId: import("zod/mini").ZodMiniString<string>;
+                descriptor: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniCustom<import("../precompile/Protocol.js").ChannelDescriptor, import("../precompile/Protocol.js").ChannelDescriptor>>;
+                transaction: import("zod/mini").ZodMiniString<string>;
+                type: import("zod/mini").ZodMiniLiteral<"transaction">;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                action: import("zod/mini").ZodMiniLiteral<"voucher">;
+                channelId: import("zod/mini").ZodMiniString<string>;
+                cumulativeAmount: import("zod/mini").ZodMiniString<string>;
+                descriptor: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniCustom<import("../precompile/Protocol.js").ChannelDescriptor, import("../precompile/Protocol.js").ChannelDescriptor>>;
+                signature: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                action: import("zod/mini").ZodMiniLiteral<"close">;
+                channelId: import("zod/mini").ZodMiniString<string>;
+                closeSignature: import("zod/mini").ZodMiniString<string>;
+                cumulativeAmount: import("zod/mini").ZodMiniString<string>;
+                descriptor: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniCustom<import("../precompile/Protocol.js").ChannelDescriptor, import("../precompile/Protocol.js").ChannelDescriptor>>;
+                signature: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>], "action">;
+        };
+        request: import("zod/mini").ZodMiniPipe<import("zod/mini").ZodMiniObject<{
+            amount: import("zod/mini").ZodMiniString<string>;
+            chainId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+            channelId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            currency: import("zod/mini").ZodMiniString<string>;
+            decimals: import("zod/mini").ZodMiniNumber<number>;
+            escrowContract: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            feePayer: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniPipe<import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniBoolean<boolean>, import("zod/mini").ZodMiniCustom<import("viem").Account, import("viem").Account>]>, import("zod/mini").ZodMiniTransform<boolean, boolean | import("viem").Account>>>;
+            feeToken: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            minVoucherDelta: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            operator: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            recipient: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            sessionProtocol: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniEnum<{
+                v1: "v1";
+                v2: "v2";
+            }>>;
+            sessionSnapshot: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniCustom<import("../Snapshot.js").SessionSnapshot, import("../Snapshot.js").SessionSnapshot>>;
+            suggestedDeposit: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            unitType: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniTransform<{
+            currency: string;
+            recipient?: string | undefined;
+            unitType: string;
+            amount: string;
+            suggestedDeposit?: string | undefined;
+            methodDetails: {
+                escrowContract: string | undefined;
+                channelId?: string | undefined;
+                minVoucherDelta?: string | undefined;
+                chainId?: number | undefined;
+                feePayer?: boolean | undefined;
+                feeToken?: string | undefined;
+                operator?: string | undefined;
+                sessionProtocol?: "v1" | "v2" | undefined;
+                sessionSnapshot?: import("../Snapshot.js").SessionSnapshot | undefined;
+            };
+        }, {
+            amount: string;
+            chainId?: number | undefined;
+            channelId?: string | undefined;
+            currency: string;
+            decimals: number;
+            escrowContract?: string | undefined;
+            feePayer?: boolean | undefined;
+            feeToken?: string | undefined;
+            minVoucherDelta?: string | undefined;
+            operator?: string | undefined;
+            recipient?: string | undefined;
+            sessionProtocol?: "v1" | "v2" | undefined;
+            sessionSnapshot?: import("../Snapshot.js").SessionSnapshot | undefined;
+            suggestedDeposit?: string | undefined;
+            unitType: string;
+        }>>;
+    };
+}, session.DeriveDefaults<parameters>, parameters["sse"] extends false | undefined ? undefined : Transport.Sse, session.Extensions, undefined>;
+export declare namespace session {
+    const serializeSnapshot: typeof serializeSessionSnapshot;
+    const deserializeSnapshot: typeof deserializeSessionSnapshot;
+    /** Extensions attached to the Tempo session method handler. */
+    type Extensions = {
+        /** Applies the configured automatic settlement policy to a committed channel charge. */
+        settleScheduled: SettleChargedSessionChannel;
+        /** Serves a WebSocket route from this handler using its configured store and settlement policy. */
+        serveWebSocket: (options: ServeWebSocketOptions) => Promise<void>;
+    };
+    /** WebSocket server options supplied after the session binds shared dependencies. */
+    type ServeWebSocketOptions = Omit<Ws.serve.Options, 'beforeCharge' | 'onChargeCommitted' | 'settleScheduled' | 'store'>;
+    /** Request defaults inferred from the Tempo session method schema. */
+    type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.session>, 'escrowContract' | 'feePayer' | 'recipient'>;
+    /** Partial fee-sponsor policy used for server-submitted session transactions. */
+    type FeePayerPolicy = Partial<FeePayer.Policy>;
+    /** Parameters accepted by the TIP-1034 server session payment method. */
+    type Parameters = {
+        /** TTL in milliseconds for cached on-chain channel state during non-mutating validation, and before a voucher accepted under `voucherStateMaxAge` starts a fresh read. @default 5_000 */
+        channelStateTtl?: number | undefined;
+        /**
+         * Maximum age in milliseconds of verified on-chain channel state that a voucher may be validated
+         * and accepted against without waiting for a fresh read. The fresh read then finishes in the background and
+         * records a pending close, so later vouchers are rejected. `0` reads on-chain state before every
+         * acceptance.
+         *
+         * A payer can withdraw only after the escrow's `CLOSE_GRACE_PERIOD` (900 s on Tempo) following a
+         * close request, so vouchers accepted this way stay settleable as long as the payee settles them
+         * within the grace period minus this age. Keep it well below that bound.
+         * @default 0
+         */
+        voucherStateMaxAge?: number | undefined;
+        /** Override the fee-sponsor policy used for sponsored open/topUp transactions and server-driven close transactions. */
+        feePayerPolicy?: FeePayerPolicy | undefined;
+        /** Minimum voucher delta to accept (numeric string, default: "0"). */
+        minVoucherDelta?: string | undefined;
+        /**
+         * Maps authenticated application identity and payment scope to an existing channel ID.
+         * Called only when the request does not already supply a channel ID. MPPx then loads that
+         * ID from `store` and validates the channel before including its snapshot in a challenge or
+         * bootstrap response. The store is not searched automatically and does not need to implement
+         * a secondary-index format.
+         */
+        resolveChannelId?: ResolveSessionChannelId | undefined;
+        /**
+         * Enables same-route `HEAD` recovery before a paid request. The server issues a zero-amount
+         * identity challenge, verifies the returned proof, passes its authenticated `source` to
+         * `resolveChannelId`, validates the loaded channel's payment scope, and returns a snapshot
+         * containing the signed highest voucher for client rehydration.
+         */
+        bootstrap?: boolean | undefined;
+        /**
+         * Lets a session challenge pay for later requests to the same route until it expires. The
+         * challenge is bound to its route, currency, recipient and channel terms but not to the amount
+         * it quoted, and every request is charged its own price from the channel's accepted balance.
+         * A client can then send a voucher with a request instead of waiting for a `402`.
+         */
+        reusableChallenges?: boolean | undefined;
+        /**
+         * Charges request-priced content (`unitType: 'request'`) in the same store update that accepts
+         * its voucher, before the response, instead of in a second update when the response is
+         * delivered. Always enabled for SSE request-priced content, including POST requests that
+         * return plain responses. The server must refund requests it cannot serve.
+         */
+        chargeOnAcceptance?: boolean | undefined;
+        /**
+         * Atomic store backend for channel state.
+         *
+         * Session mutations must be linearizable across instances so spent,
+         * highest-voucher, top-up, and close/finalization updates cannot race.
+         * Use `Store.memory()` for tests or local single-process usage.
+         */
+        store?: Store.AtomicStore | undefined;
+        /** Enable SSE streaming. Pass `true` for defaults or an options object to configure SSE. */
+        sse?: boolean | Transport.sse.Options | undefined;
+        /** Tempo chain ID used for TIP-1034 channel escrow challenges. Defaults to the resolved client chain ID. */
+        chainId?: number | undefined;
+        /** Escrow contract advertised to clients. Defaults to the canonical TIP20EscrowChannel address. */
+        escrowContract?: Address | undefined;
+        /** Callback invoked after any on-chain settlement or close transaction is confirmed. */
+        onSessionSettlement?: OnSessionSettlement | undefined;
+        /** Callback invoked when a scheduled settlement or close transaction fails. Observer errors are ignored. */
+        onSessionSettlementFailure?: OnSessionSettlementFailure | undefined;
+        /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
+        settlementSchedule?: SettlementSchedule | undefined;
+        /** Optional fee token for management and server-driven settle/close transactions. */
+        feeToken?: Address | undefined;
+        /**
+         * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
+         * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never
+         * the credential's client-supplied `source`. A transaction over the limit, or one whose
+         * signatures prove no payer, is broadcast unsponsored, so it lands only if the payer pays its
+         * own fees.
+         */
+        sponsorshipLimit?: SponsorshipLimit.Parameters | undefined;
+    } & Account.resolve.Parameters & Client.getResolver.Parameters & Defaults & Method.ComposableHooks<typeof Methods.session>;
+    /** Defaults derived from `session()` parameters for handler type inference. */
+    type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<parameters, Defaults, {
+        currency: string;
+        decimals: number;
+    }>;
+}
+/**
+ * Charge against a precompile-backed channel's balance.
+ *
+ * Exported so consumers can deduct from a channel outside the `session()`
+ * handler.
+ *
+ * Delegates to the shared `deductFromChannel` atomic helper and translates
+ * failure modes into typed errors (`InsufficientBalanceError`, `ChannelClosedError`).
+ *
+ * With `options.idempotencyKey` the channel is charged at most once per key: a retry with the same
+ * key and amount returns the channel without charging again, and the same key with a different
+ * amount throws `IdempotencyKeyConflictError`.
+ *
+ * @example
+ * ```ts
+ * // One durable job per voucher, retried under its operation ID.
+ * const channel = await Session.Server.charge(store, channelId, jobCost, {
+ *   idempotencyKey: operationId,
+ * })
+ * ```
+ */
+export declare function charge(store: SessionStoreInput, channelId: Hex, amount: bigint, options?: ChannelStore.ChargeOptions): Promise<ChannelStore.State>;
+/**
+ * Returns an unused amount to a channel's `spent` at most once per idempotency key.
+ *
+ * The first outcome for a key is final. A credit is `declined` when the channel is closing or
+ * finalized, or when it would take `spent` below zero or below what settled, or may still settle,
+ * on-chain, because a close captures `max(spent, settled)`; the caller then refunds another way.
+ * `unknown` reports a store write that failed and may have committed; retrying with the same key
+ * returns the outcome that was recorded.
+ *
+ * @example
+ * ```ts
+ * const result = await Session.Server.credit(store, channelId, unused, {
+ *   idempotencyKey: `refund:${flowId}`,
+ * })
+ * if (result.status === 'declined') await refundAnotherWay()
+ * ```
+ */
+export declare function credit(store: SessionStoreInput, channelId: Hex, amount: bigint, options: ChannelStore.CreditOptions): Promise<ChannelStore.CreditResult>;
+//# sourceMappingURL=Session.d.ts.map

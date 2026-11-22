@@ -1,0 +1,766 @@
+import { AmountExceedsDepositError, ChannelClosedError, ChannelNotFoundError, DeltaTooSmallError, InsufficientBalanceError, InvalidSignatureError, VerificationFailedError, } from '../../../Errors.js';
+import { createSessionReceipt } from '../precompile/Protocol.js';
+import { uint96 } from '../precompile/Protocol.js';
+import * as Voucher from '../precompile/Voucher.js';
+import { assertSameDescriptor, validateChannelDescriptor, validateChannelState, } from './CredentialVerification.js';
+/** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */
+export function isPrecompileState(state) {
+    return state.backend === 'precompile';
+}
+/** Returns the greater bigint value without decreasing persisted monotonic state. */
+export function keepGreater(current, next) {
+    return current > next ? current : next;
+}
+/** Returns the greater close-request timestamp as a bigint. */
+export function keepGreaterTimestamp(current, next) {
+    return keepGreater(current, BigInt(next));
+}
+/** Keeps local active-channel state in sync with authoritative on-chain reads. */
+export function mergeActiveOnChainState(current, state) {
+    return {
+        closeRequestedAt: keepGreaterTimestamp(current?.closeRequestedAt ?? 0n, state.closeRequestedAt),
+        deposit: keepGreater(current?.deposit ?? 0n, state.deposit),
+        settledOnChain: keepGreater(current?.settledOnChain ?? 0n, state.settled),
+    };
+}
+/** Keeps the existing higher voucher, otherwise stores the supplied candidate voucher. */
+export function resolveHighestVoucher(parameters) {
+    const { channelId, current, cumulativeAmount, signature } = parameters;
+    if (current?.highestVoucherAmount && current.highestVoucherAmount > cumulativeAmount) {
+        return {
+            highestVoucherAmount: current.highestVoucherAmount,
+            highestVoucher: current.highestVoucher,
+        };
+    }
+    return {
+        highestVoucherAmount: cumulativeAmount,
+        highestVoucher: { channelId, cumulativeAmount, signature },
+    };
+}
+/** Derives persisted identity fields from a verified precompile channel descriptor. */
+export function resolvePrecompileChannelIdentity(parameters) {
+    const { authorizedSigner, chainId, channelId, descriptor, escrow, expiringNonceHash } = parameters;
+    return {
+        authorizedSigner,
+        backend: 'precompile',
+        chainId,
+        channelId,
+        descriptor,
+        escrowContract: escrow,
+        expiringNonceHash,
+        operator: descriptor.operator,
+        payee: descriptor.payee,
+        payer: descriptor.payer,
+        salt: descriptor.salt,
+        token: descriptor.token,
+    };
+}
+/** Builds the persisted state for a verified precompile channel open. */
+export function openChannelState(parameters) {
+    const { authorizedSigner, chainId, channelId, current, descriptor, escrow, expiringNonceHash } = parameters;
+    const { state } = parameters;
+    const { cumulativeAmount, signature } = parameters;
+    const highestVoucher = resolveHighestVoucher({
+        channelId,
+        current,
+        cumulativeAmount,
+        signature,
+    });
+    const onChain = mergeActiveOnChainState(current, state);
+    return {
+        ...(current ?? {}),
+        ...resolvePrecompileChannelIdentity({
+            authorizedSigner,
+            chainId,
+            channelId,
+            descriptor,
+            escrow,
+            expiringNonceHash,
+        }),
+        closeRequestedAt: onChain.closeRequestedAt,
+        deposit: onChain.deposit,
+        settledOnChain: onChain.settledOnChain,
+        highestVoucherAmount: highestVoucher.highestVoucherAmount,
+        highestVoucher: highestVoucher.highestVoucher,
+        ...(current && highestVoucher.highestVoucherAmount > current.highestVoucherAmount
+            ? {
+                retainedVouchers: retainVouchers(current, highestVoucher.highestVoucherAmount, onChain.settledOnChain),
+            }
+            : {}),
+        spent: keepGreater(current?.spent ?? 0n, state.settled),
+        units: current?.units ?? 0,
+        finalized: current?.finalized ?? false,
+        createdAt: current?.createdAt ?? new Date().toISOString(),
+    };
+}
+/** Merges top-up on-chain state into persisted channel state without decreasing monotonic fields. */
+export function topUpChannelState(parameters) {
+    const { current, state } = parameters;
+    if (!current)
+        return current;
+    return {
+        ...current,
+        ...mergeActiveOnChainState(current, state),
+    };
+}
+/**
+ * Number of accepted vouchers kept below the highest one. Clients sign every voucher above their
+ * last one, so once a credit lowers `spent` the highest voucher stays above it for good and only
+ * earlier vouchers can be settled; those fall at or below `spent` as later charges accumulate.
+ * Each costs about 200 bytes of the channel record. In a simulated 20,000-request channel crediting
+ * up to 80% of each request back, which left the highest voucher 80,000 units above `spent`,
+ * settling every 50 requests left on average 1,290 units unsettled with 16 retained vouchers and
+ * 784 with 32.
+ */
+export const maxRetainedVouchers = 16;
+/**
+ * Returns the vouchers to keep once `highestVoucherAmount` replaces the highest voucher: the
+ * retained ones and the superseded highest voucher, above `settledOnChain`. Beyond
+ * {@link maxRetainedVouchers} it repeatedly drops the voucher whose neighbours are closest, so the
+ * kept ones stay spread over the unsettled range and some keep falling at or below `spent` however
+ * far credits have moved it below the highest voucher.
+ */
+export function retainVouchers(current, highestVoucherAmount, settledOnChain = current.settledOnChain) {
+    const candidates = [...(current.retainedVouchers ?? [])];
+    if (current.highestVoucher)
+        candidates.push({
+            cumulativeAmount: current.highestVoucher.cumulativeAmount,
+            signature: current.highestVoucher.signature,
+        });
+    const kept = candidates
+        .filter(({ cumulativeAmount }) => cumulativeAmount > settledOnChain && cumulativeAmount < highestVoucherAmount)
+        .sort((a, b) => a.cumulativeAmount < b.cumulativeAmount
+        ? -1
+        : a.cumulativeAmount > b.cumulativeAmount
+            ? 1
+            : 0);
+    while (kept.length > maxRetainedVouchers) {
+        let drop = 0;
+        let narrowest;
+        for (let index = 0; index < kept.length; index++) {
+            const below = index === 0 ? settledOnChain : kept[index - 1].cumulativeAmount;
+            const above = index === kept.length - 1 ? highestVoucherAmount : kept[index + 1].cumulativeAmount;
+            if (narrowest === undefined || above - below < narrowest) {
+                narrowest = above - below;
+                drop = index;
+            }
+        }
+        kept.splice(drop, 1);
+    }
+    return kept;
+}
+/**
+ * Returns the largest accepted voucher a settlement may capture. The escrow's `settle` captures a
+ * voucher's whole cumulative amount, and a credit may leave the highest voucher above `spent`, so
+ * the voucher must be at most `spent`; one at or below `settledOnChain` captures nothing.
+ */
+export function resolveSettleableVoucher(state) {
+    let settleable;
+    for (const voucher of [
+        ...(state.retainedVouchers ?? []),
+        ...(state.highestVoucher ? [state.highestVoucher] : []),
+    ]) {
+        if (voucher.cumulativeAmount > state.spent || voucher.cumulativeAmount <= state.settledOnChain)
+            continue;
+        if (!settleable || voucher.cumulativeAmount > settleable.cumulativeAmount)
+            settleable = voucher;
+    }
+    if (!settleable)
+        return null;
+    return {
+        channelId: state.channelId,
+        cumulativeAmount: settleable.cumulativeAmount,
+        signature: settleable.signature,
+    };
+}
+/** Merges an accepted voucher into persisted channel state after signature and on-chain checks pass. */
+export function acceptVoucherStateUpdate(parameters) {
+    const { channelState, current, verifiedAt, voucher } = parameters;
+    if (!current)
+        throw new ChannelNotFoundError({ reason: 'channel not found' });
+    if (current.finalized)
+        throw new ChannelClosedError({ reason: 'channel is finalized' });
+    if (current.closeRequestedAt !== 0n)
+        throw new ChannelClosedError({ reason: 'channel has a pending close request' });
+    const onChain = {
+        ...mergeActiveOnChainState(current, channelState),
+        ...(verifiedAt === undefined
+            ? {}
+            : { onChainVerifiedAt: Math.max(verifiedAt, current.onChainVerifiedAt ?? 0) }),
+    };
+    if (voucher.cumulativeAmount <= current.highestVoucherAmount) {
+        return { ...current, ...onChain };
+    }
+    return {
+        ...current,
+        ...onChain,
+        highestVoucherAmount: voucher.cumulativeAmount,
+        highestVoucher: voucher,
+        retainedVouchers: retainVouchers(current, voucher.cumulativeAmount, onChain.settledOnChain),
+    };
+}
+/**
+ * Resolves the close capture amount and validates it is covered by both the
+ * close voucher and current on-chain deposit.
+ */
+export function resolveCloseCaptureAmount(parameters) {
+    const { cumulativeAmount, onChainDeposit, onChainSettled, spent } = parameters;
+    if (cumulativeAmount < spent) {
+        throw new VerificationFailedError({
+            reason: `close voucher amount must be >= ${spent} (spent)`,
+        });
+    }
+    const captureAmount = uint96(spent > onChainSettled ? spent : onChainSettled);
+    if (captureAmount > cumulativeAmount) {
+        throw new VerificationFailedError({
+            reason: `close voucher amount must be >= ${captureAmount} (capture amount)`,
+        });
+    }
+    if (captureAmount > onChainDeposit) {
+        throw new AmountExceedsDepositError({
+            reason: 'close capture amount exceeds on-chain deposit',
+        });
+    }
+    return captureAmount;
+}
+/** Seconds a server close transaction stays valid after its pending-close marker is written. */
+export const pendingCloseValiditySeconds = 25;
+/** Extra seconds allowed for clock differences between the server and the chain. */
+export const pendingCloseClockSkewSeconds = 30;
+/** Clears a server pending-close marker whose close transaction expired without closing the channel. */
+export function reconcileExpiredPendingClose(parameters) {
+    const { current, now, state } = parameters;
+    if (!current || current.finalized || current.closeRequestedAt === 0n)
+        return current;
+    // An open channel with no on-chain close request proves the expired close never executed.
+    if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n)
+        return current;
+    const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds);
+    if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds))
+        return current;
+    return { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined };
+}
+/** Marks local channel state as pending close and returns the bounded capture amount. */
+export function markPendingClose(parameters) {
+    const { closeRequestedAt, cumulativeAmount, current, onChainSettled, onChainDeposit } = parameters;
+    if (!current)
+        return { captureAmount: 0n, state: null };
+    if (current.finalized)
+        throw new ChannelClosedError({ reason: 'channel is already finalized' });
+    if (current.closeRequestedAt !== 0n)
+        throw new ChannelClosedError({ reason: 'channel has a pending close request' });
+    const captureAmount = resolveCloseCaptureAmount({
+        cumulativeAmount,
+        onChainDeposit,
+        onChainSettled,
+        spent: current.spent,
+    });
+    return {
+        captureAmount,
+        state: { ...current, closeRequestedAt, pendingCloseAt: closeRequestedAt },
+    };
+}
+/** Finalizes local channel state after a successful close transaction. */
+export function finalizeClosedChannelState(parameters) {
+    const { captureAmount, channelId, cumulativeAmount, current, signature } = parameters;
+    if (!current)
+        return current;
+    const highestVoucher = resolveHighestVoucher({
+        channelId,
+        current,
+        cumulativeAmount,
+        signature,
+    });
+    return {
+        ...current,
+        finalized: true,
+        closeRequestedAt: 0n,
+        deposit: 0n,
+        settledOnChain: keepGreater(current.settledOnChain, captureAmount),
+        highestVoucherAmount: highestVoucher.highestVoucherAmount,
+        highestVoucher: highestVoucher.highestVoucher,
+    };
+}
+/** Loads a precompile-backed channel or throws a verification error. */
+export async function loadPrecompileChannel(parameters) {
+    const { channelId, chainId, descriptor, escrow, store } = parameters;
+    const channel = await store.getChannel(channelId);
+    if (!channel)
+        throw new ChannelNotFoundError({ reason: 'channel not found' });
+    if (!isPrecompileState(channel))
+        throw new VerificationFailedError({ reason: 'channel is not precompile-backed' });
+    assertSameDescriptor(descriptor, channel.descriptor);
+    if (parameters.validateDescriptor)
+        validateChannelDescriptor(descriptor, channelId, chainId, escrow, channel.payee, channel.token);
+    return channel;
+}
+/** Verifies a cumulative voucher without changing persisted channel state. */
+export async function validateVoucher(parameters) {
+    const { minVoucherDelta, channel, voucher, channelState, methodDetails } = parameters;
+    validateChannelState(channelState);
+    if (voucher.cumulativeAmount > channelState.deposit)
+        throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' });
+    if (voucher.cumulativeAmount < channel.highestVoucherAmount)
+        throw new VerificationFailedError({
+            reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
+        });
+    const valid = await Voucher.verifyVoucher(methodDetails.escrowContract, methodDetails.chainId, voucher, channel.authorizedSigner);
+    if (!valid)
+        throw new InvalidSignatureError({ reason: 'invalid voucher signature' });
+    if (voucher.cumulativeAmount <= channelState.settled)
+        throw new VerificationFailedError({
+            reason: 'voucher cumulativeAmount is below on-chain settled amount',
+        });
+    if (voucher.cumulativeAmount === channel.highestVoucherAmount)
+        return { alreadyAccepted: true };
+    const delta = voucher.cumulativeAmount - channel.highestVoucherAmount;
+    if (delta < minVoucherDelta)
+        throw new DeltaTooSmallError({
+            reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
+        });
+    return { alreadyAccepted: false };
+}
+/**
+ * Checks a cumulative voucher's amounts against channel state, without its signature, so the
+ * check can run inside the store update that accepts it.
+ */
+export function assertVoucherAmounts(parameters) {
+    const { channel, channelState, minVoucherDelta, voucher } = parameters;
+    validateChannelState(channelState);
+    if (voucher.cumulativeAmount > channelState.deposit)
+        throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' });
+    if (voucher.cumulativeAmount < channel.highestVoucherAmount)
+        throw new VerificationFailedError({
+            reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
+        });
+    if (voucher.cumulativeAmount <= channelState.settled)
+        throw new VerificationFailedError({
+            reason: 'voucher cumulativeAmount is below on-chain settled amount',
+        });
+    if (voucher.cumulativeAmount === channel.highestVoucherAmount)
+        return { alreadyAccepted: true };
+    const delta = voucher.cumulativeAmount - channel.highestVoucherAmount;
+    if (delta < minVoucherDelta)
+        throw new DeltaTooSmallError({
+            reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
+        });
+    return { alreadyAccepted: false };
+}
+/**
+ * Charges `chargeAmount` to a channel state that just accepted a voucher, for the same store
+ * update. A charge the available balance cannot cover leaves the accepted state uncharged.
+ */
+export function planVoucherAcceptance(parameters) {
+    const { accepted, chargeAmount } = parameters;
+    if (chargeAmount === undefined)
+        return { channel: accepted, charged: false };
+    const deduction = planDeduction(accepted, chargeAmount);
+    if (deduction.op !== 'set')
+        return { channel: accepted, charged: false };
+    return { channel: deduction.value, charged: true };
+}
+/** Reports a request charge that the channel's available balance could not cover. */
+export function insufficientBalanceForCharge(channel, chargeAmount) {
+    return new InsufficientBalanceError({
+        reason: `requested ${chargeAmount}, available ${channel.highestVoucherAmount - channel.spent - reservedStreamAmount(channel)}`,
+    });
+}
+/** Verifies a cumulative voucher and returns a session receipt after store reconciliation. */
+export async function verifyAndAcceptVoucher(parameters) {
+    const { store, challenge, channel, voucher, channelState, requireAdvance, verifiedAt, chargeAmount, } = parameters;
+    const validation = await validateVoucher(parameters);
+    if (validation.alreadyAccepted && requireAdvance)
+        throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' });
+    if (validation.alreadyAccepted && chargeAmount === undefined)
+        return createSessionReceipt({
+            challengeId: challenge.id,
+            channelId: voucher.channelId,
+            acceptedCumulative: channel.highestVoucherAmount,
+            spent: channel.spent,
+            units: channel.units,
+        });
+    let charged = false;
+    const updated = await store.updateChannel(voucher.channelId, (current) => {
+        if (requireAdvance &&
+            current !== null &&
+            voucher.cumulativeAmount <= current.highestVoucherAmount)
+            throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' });
+        const acceptance = planVoucherAcceptance({
+            accepted: acceptVoucherStateUpdate({ channelState, current, verifiedAt, voucher }),
+            chargeAmount,
+        });
+        charged = acceptance.charged;
+        return acceptance.channel;
+    });
+    if (!updated)
+        throw new ChannelNotFoundError({ reason: 'channel not found' });
+    if (chargeAmount !== undefined) {
+        if (!charged)
+            throw insufficientBalanceForCharge(updated, chargeAmount);
+        parameters.onCharged?.(updated);
+    }
+    return createSessionReceipt({
+        challengeId: challenge.id,
+        channelId: voucher.channelId,
+        acceptedCumulative: updated.highestVoucherAmount,
+        spent: updated.spent,
+        units: updated.units,
+    });
+}
+/** Normalizes and validates 32-byte channel IDs before store lookup or persistence. */
+export function normalizeChannelId(channelId) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(channelId))
+        throw new Error('Invalid session channel ID.');
+    return channelId.toLowerCase();
+}
+function normalizeState(channelId, state) {
+    return state.channelId === channelId ? state : { ...state, channelId };
+}
+function normalizeMaybeState(channelId, state) {
+    return state ? normalizeState(channelId, state) : null;
+}
+/** Normalizes any stored channel value inside a store change. */
+function normalizeChange(channelId, change) {
+    if (change.op !== 'set')
+        return change;
+    return {
+        ...change,
+        value: normalizeState(channelId, change.value),
+    };
+}
+/**
+ * Wraps a generic {@link Store} into the internal {@link Store}
+ * interface used by server handlers and the SSE metering loop.
+ *
+ * Provides `waitForUpdate` notifications so the SSE `chargeOrWait` loop
+ * can wake up without polling.
+ *
+ * ## Atomicity
+ *
+ * Mutations use `get` → `fn` → `set` guarded by a per-key in-process
+ * mutex. This serializes concurrent `updateChannel` calls within a
+ * single JS runtime but does **not** protect against races across
+ * multiple processes or instances.
+ *
+ * Backends that need true atomicity (e.g., Durable Objects, D1)
+ * should implement {@link Store} directly.
+ */
+const storeCache = new WeakMap();
+/** Wraps a generic mppx store in the shared session channel-store interface. */
+export function fromStore(store) {
+    const cached = storeCache.get(store);
+    if (cached)
+        return cached;
+    const stateStore = store;
+    const atomicUpdate = stateStore.update;
+    const runtime = {
+        locks: new Map(),
+        waiters: new Map(),
+    };
+    function notify(channelId) {
+        const set = runtime.waiters.get(channelId);
+        if (!set)
+            return;
+        for (const resolve of set)
+            resolve();
+        runtime.waiters.delete(channelId);
+    }
+    async function update(channelId, fn) {
+        return updateResult(channelId, (current) => {
+            const next = fn(current);
+            if (next)
+                return { op: 'set', value: next, result: next };
+            return { op: 'delete', result: null };
+        });
+    }
+    async function updateResult(channelId, fn) {
+        const normalizedChannelId = normalizeChannelId(channelId);
+        let change;
+        if (atomicUpdate) {
+            const result = await atomicUpdate(normalizedChannelId, (current) => {
+                const normalizedCurrent = normalizeMaybeState(normalizedChannelId, current);
+                change = normalizeChange(normalizedChannelId, fn(normalizedCurrent));
+                return change;
+            });
+            if (change?.op !== 'noop')
+                notify(normalizedChannelId);
+            return result;
+        }
+        while (runtime.locks.has(normalizedChannelId))
+            await runtime.locks.get(normalizedChannelId);
+        let release;
+        runtime.locks.set(normalizedChannelId, new Promise((r) => {
+            release = r;
+        }));
+        try {
+            const current = normalizeMaybeState(normalizedChannelId, await stateStore.get(normalizedChannelId));
+            change = normalizeChange(normalizedChannelId, fn(current));
+            if (change.op === 'set') {
+                await stateStore.put(normalizedChannelId, change.value);
+            }
+            if (change.op === 'delete')
+                await stateStore.delete(normalizedChannelId);
+            if (change.op !== 'noop')
+                notify(normalizedChannelId);
+            return change.result;
+        }
+        finally {
+            runtime.locks.delete(normalizedChannelId);
+            release();
+        }
+    }
+    const cs = {
+        atomic: typeof atomicUpdate === 'function',
+        async getChannel(channelId) {
+            const normalizedChannelId = normalizeChannelId(channelId);
+            return normalizeMaybeState(normalizedChannelId, await stateStore.get(normalizedChannelId));
+        },
+        async updateChannel(channelId, fn) {
+            return update(channelId, fn);
+        },
+        waitForUpdate(channelId, signal) {
+            return new Promise((resolve, reject) => {
+                const normalizedChannelId = normalizeChannelId(channelId);
+                if (signal?.aborted) {
+                    reject(signal.reason ?? new Error('aborted'));
+                    return;
+                }
+                let set = runtime.waiters.get(normalizedChannelId);
+                if (!set) {
+                    set = new Set();
+                    runtime.waiters.set(normalizedChannelId, set);
+                }
+                const settle = () => {
+                    signal?.removeEventListener('abort', onAbort);
+                    resolve();
+                };
+                const onAbort = () => {
+                    set?.delete(settle);
+                    if (set?.size === 0)
+                        runtime.waiters.delete(normalizedChannelId);
+                    reject(signal?.reason ?? new Error('aborted'));
+                };
+                signal?.addEventListener('abort', onAbort, { once: true });
+                set.add(settle);
+            });
+        },
+    };
+    cs.updateChannelResult = updateResult;
+    storeCache.set(store, cs);
+    return cs;
+}
+/**
+ * Default time a keyed charge or credit outcome is kept: a day, longer than any retry within one
+ * request or durable job step. Callers whose retries span longer pass their own `retention`.
+ */
+export const defaultIdempotencyRetention = 24 * 60 * 60 * 1000;
+/** Raised when an idempotency key is reused with terms other than those it recorded. */
+export class IdempotencyKeyConflictError extends Error {
+    name = 'IdempotencyKeyConflictError';
+    /** The reused key. */
+    idempotencyKey;
+    constructor(options) {
+        super(`Session ${options.operation} "${options.idempotencyKey}" was recorded with different terms.`);
+        this.idempotencyKey = options.idempotencyKey;
+    }
+}
+/** Atomic read-modify-write through `updateChannelResult`, or `updateChannel` when absent. */
+async function applyChange(store, channelId, fn) {
+    if (store.updateChannelResult)
+        return store.updateChannelResult(channelId, fn);
+    // The callback can rerun on a contended write; the result of its last run is the stored one.
+    let result;
+    await store.updateChannel(channelId, (current) => {
+        const change = fn(current);
+        result = change.result;
+        if (change.op === 'set')
+            return change.value;
+        if (change.op === 'delete')
+            return null;
+        return current;
+    });
+    return result;
+}
+/** Validates the idempotency options of a keyed charge or credit. */
+export function assertIdempotencyOptions(options) {
+    const { idempotencyKey, retention } = options;
+    if (idempotencyKey !== undefined && (typeof idempotencyKey !== 'string' || !idempotencyKey))
+        throw new Error('`idempotencyKey` must be a non-empty string.');
+    if (retention !== undefined && (!Number.isFinite(retention) || retention <= 0))
+        throw new Error('`retention` must be a positive number.');
+}
+/** Markers of a channel that have not expired. */
+function liveMarkers(state, now) {
+    const markers = {};
+    for (const [key, marker] of Object.entries(state.idempotencyMarkers ?? {}))
+        if (marker.expiresAt > now)
+            markers[key] = marker;
+    return markers;
+}
+/**
+ * Atomically deducts `amount` from a channel's available voucher balance.
+ *
+ * Returns `{ ok: true, channel }` with updated spend/unit counters when the
+ * deduction succeeds. Returns `{ ok: false, channel }` without mutating state
+ * when the channel exists but cannot currently be charged. With an
+ * `idempotencyKey`, a charge recorded under the key returns
+ * `{ ok: true, channel, replayed: true }` without charging again.
+ */
+export async function deductFromChannel(store, channelId, amount, options) {
+    const idempotencyKey = options?.idempotencyKey;
+    if (idempotencyKey !== undefined) {
+        assertIdempotencyOptions(options);
+        const now = Date.now();
+        const expiresAt = now + (options?.retention ?? defaultIdempotencyRetention);
+        const result = await applyChange(store, channelId, (current) => planKeyedDeduction(current, amount, idempotencyKey, expiresAt, now));
+        if (!result)
+            throw new Error('channel not found');
+        if (result === 'conflict')
+            throw new IdempotencyKeyConflictError({ idempotencyKey, operation: 'charge' });
+        return result;
+    }
+    if (store.updateChannelResult) {
+        const result = await store.updateChannelResult(channelId, (current) => planDeduction(current, amount));
+        if (!result)
+            throw new Error('channel not found');
+        return result;
+    }
+    let result = null;
+    const channel = await store.updateChannel(channelId, (current) => {
+        const change = planDeduction(current, amount);
+        result = change.result;
+        if (change.op === 'set')
+            return change.value;
+        return current;
+    });
+    if (!channel)
+        throw new Error('channel not found');
+    return result ?? { ok: false, channel };
+}
+function planKeyedDeduction(current, amount, idempotencyKey, expiresAt, now) {
+    if (!current)
+        return { op: 'noop', result: null };
+    const markers = liveMarkers(current, now);
+    const markerKey = `charge:${idempotencyKey}`;
+    const recorded = markers[markerKey];
+    if (recorded) {
+        if (recorded.outcome !== 'charged' || recorded.amount !== amount)
+            return { op: 'noop', result: 'conflict' };
+        return { op: 'noop', result: { ok: true, channel: current, replayed: true } };
+    }
+    const deduction = planDeduction(current, amount);
+    if (deduction.op !== 'set')
+        return deduction;
+    const channel = {
+        ...deduction.value,
+        idempotencyMarkers: { ...markers, [markerKey]: { amount, expiresAt, outcome: 'charged' } },
+    };
+    return { op: 'set', value: channel, result: { ok: true, channel } };
+}
+function planDeduction(current, amount) {
+    if (!current)
+        return { op: 'noop', result: null };
+    if (current.finalized)
+        return { op: 'noop', result: { ok: false, channel: current } };
+    if (current.closeRequestedAt !== 0n)
+        return { op: 'noop', result: { ok: false, channel: current } };
+    if (current.highestVoucherAmount - current.spent - reservedStreamAmount(current) < amount)
+        return { op: 'noop', result: { ok: false, channel: current } };
+    const next = { ...current, spent: current.spent + amount, units: current.units + 1 };
+    return { op: 'set', value: next, result: { ok: true, channel: next } };
+}
+/**
+ * Returns `amount` to a channel's `spent` at most once per idempotency key. The credit is declined
+ * when the channel is closing or finalized, or when it would take `spent` below zero or below
+ * what settled, or may still settle, on-chain, because a close captures `max(spent, settled)`.
+ * The first outcome for a key is final, so a declined credit is never applied later.
+ */
+export async function creditChannel(store, channelId, amount, options) {
+    const { idempotencyKey, units = 0 } = options;
+    assertIdempotencyOptions(options);
+    if (typeof idempotencyKey !== 'string')
+        throw new Error('`idempotencyKey` is required.');
+    if (amount <= 0n)
+        throw new Error('Credit amount must be positive.');
+    if (!Number.isSafeInteger(units) || units < 0)
+        throw new Error('`units` must be a non-negative integer.');
+    const maxMarkers = options.maxMarkers ?? 1024;
+    if (!Number.isSafeInteger(maxMarkers) || maxMarkers < 1)
+        throw new Error('maxMarkers must be a positive safe integer');
+    const now = Date.now();
+    const expiresAt = now + (options.retention ?? defaultIdempotencyRetention);
+    let result;
+    try {
+        result = await applyChange(store, channelId, (current) => planCredit(current, { amount, expiresAt, idempotencyKey, now, units, maxMarkers }));
+    }
+    catch (error) {
+        return { status: 'unknown', error };
+    }
+    if (!result)
+        throw new ChannelNotFoundError({ reason: 'channel not found' });
+    if (result === 'capacity')
+        throw new Error('Credit idempotency marker capacity reached; reconcile manually');
+    if (result === 'conflict')
+        throw new IdempotencyKeyConflictError({ idempotencyKey, operation: 'credit' });
+    return result;
+}
+function planCredit(current, terms) {
+    const { amount, expiresAt, idempotencyKey, now, units } = terms;
+    if (!current)
+        return { op: 'noop', result: null };
+    const markers = liveMarkers(current, now);
+    const markerKey = `credit:${idempotencyKey}`;
+    const recorded = markers[markerKey];
+    if (recorded) {
+        if (recorded.outcome === 'charged' ||
+            recorded.amount !== amount ||
+            (recorded.units ?? 0) !== units)
+            return { op: 'noop', result: 'conflict' };
+        return {
+            op: 'noop',
+            result: recorded.outcome === 'credited'
+                ? { status: 'credited', channel: current, replayed: true }
+                : { status: 'declined', reason: recorded.outcome, channel: current, replayed: true },
+        };
+    }
+    if (Object.keys(markers).length >= terms.maxMarkers)
+        return { op: 'noop', result: 'capacity' };
+    const reason = creditDeclineReason(current, amount, now);
+    const marker = {
+        amount,
+        expiresAt,
+        outcome: reason ?? 'credited',
+        ...(units > 0 ? { units } : {}),
+    };
+    const channel = {
+        ...current,
+        ...(reason ? {} : { spent: current.spent - amount, units: Math.max(0, current.units - units) }),
+        idempotencyMarkers: { ...markers, [markerKey]: marker },
+    };
+    return {
+        op: 'set',
+        value: channel,
+        result: reason
+            ? { status: 'declined', reason, channel, replayed: false }
+            : { status: 'credited', channel, replayed: false },
+    };
+}
+function creditDeclineReason(current, amount, now) {
+    if (current.finalized)
+        return 'finalized';
+    if (current.closeRequestedAt !== 0n)
+        return 'closing';
+    if (amount > current.spent)
+        return 'exceedsSpent';
+    const pending = current.pendingSettlement;
+    const settling = pending && pending.expiresAt > now ? pending.amount : 0n;
+    if (current.spent - amount < keepGreater(current.settledOnChain, settling))
+        return 'belowSettled';
+    return undefined;
+}
+/** Returns unexpired stream reservations that ordinary deductions must respect. */
+export function reservedStreamAmount(state) {
+    const now = Date.now();
+    return Object.values(state.streamReservations ?? {}).reduce((total, reservation) => total + (reservation.expiresAt > now ? reservation.amount : 0n), 0n);
+}
+//# sourceMappingURL=ChannelStore.js.map

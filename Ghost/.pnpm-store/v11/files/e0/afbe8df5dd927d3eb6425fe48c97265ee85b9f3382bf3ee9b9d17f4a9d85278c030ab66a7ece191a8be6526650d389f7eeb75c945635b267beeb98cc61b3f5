@@ -1,0 +1,404 @@
+/** Default hint messages for payment errors. */
+export const Hints = {
+    paymentRequired: 'Use a supported wallet to pay for this resource using one of the supported payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md',
+    malformedCredential: 'Use a supported wallet to construct valid credentials for one of the supported payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md',
+    methodUnsupported: 'Use a supported wallet to pay for this resource using one of the supported payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md',
+};
+/**
+ * Base class for all payment-related errors.
+ */
+export class PaymentError extends Error {
+    /** Safe method-specific context for diagnostics and relay responses. */
+    details;
+    /** HTTP status code. */
+    status = 402;
+    /** Actionable hint for resolving the error (RFC 9457 extension member). */
+    hint;
+    constructor(message, options = {}) {
+        super(message);
+        this.details = options.details;
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        if (options.cause !== undefined)
+            Object.defineProperty(this, 'cause', {
+                configurable: true,
+                value: options.cause,
+                writable: true,
+            });
+    }
+    /** Converts the error to RFC 9457 Problem Details format. */
+    toProblemDetails(challengeId) {
+        return {
+            type: this.type,
+            title: this.title,
+            status: this.status,
+            detail: this.message,
+            ...(this.details && Object.keys(this.details).length > 0 && { details: this.details }),
+            ...(this.hint && { hint: this.hint }),
+            ...(challengeId && { challengeId }),
+        };
+    }
+}
+/**
+ * Credential is malformed (invalid base64url, bad JSON structure).
+ */
+export class MalformedCredentialError extends PaymentError {
+    name = 'MalformedCredentialError';
+    title = 'Malformed Credential';
+    status = 402;
+    type = 'https://paymentauth.org/problems/malformed-credential';
+    hint = Hints.malformedCredential;
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Credential is malformed: ${reason}.` : 'Credential is malformed.');
+    }
+}
+/**
+ * Challenge ID is unknown, expired, or already used.
+ */
+export class InvalidChallengeError extends PaymentError {
+    name = 'InvalidChallengeError';
+    title = 'Invalid Challenge';
+    status = 402;
+    type = 'https://paymentauth.org/problems/invalid-challenge';
+    constructor(options = {}) {
+        const { id, reason } = options;
+        const idPart = id ? ` "${id}"` : '';
+        const reasonPart = reason ? `: ${reason}` : '';
+        super(`Challenge${idPart} is invalid${reasonPart}.`);
+    }
+}
+/**
+ * Payment proof is invalid or verification failed.
+ */
+export class VerificationFailedError extends PaymentError {
+    name = 'VerificationFailedError';
+    title = 'Verification Failed';
+    type = 'https://paymentauth.org/problems/verification-failed';
+    constructor(options = {}) {
+        const { details, reason } = options;
+        super(reason ? `Payment verification failed: ${reason}.` : 'Payment verification failed.', {
+            details,
+        });
+    }
+}
+/**
+ * The payment behind a credential is already used or bound elsewhere: the
+ * credential was consumed by an earlier request, is being settled by a
+ * concurrent one, or its settled transfer is bound to another challenge.
+ *
+ * Answered with 403 and no challenge (the payment was valid, but policy
+ * denies access), since a fresh 402 challenge would invite an auto-paying
+ * client to pay again. The problem type stays `verification-failed`.
+ */
+export class CredentialReplayedError extends VerificationFailedError {
+    name = 'CredentialReplayedError';
+    status = 403;
+    constructor(options = {}) {
+        const { reason = 'Credential has already been used' } = options;
+        super({ reason });
+    }
+}
+/**
+ * Payment processing failed because of an unexpected internal error.
+ *
+ * The response stays generic; the original error is only available on `cause`.
+ */
+export class InternalPaymentError extends PaymentError {
+    name = 'InternalPaymentError';
+    title = 'Internal Payment Error';
+    status = 500;
+    type = 'https://paymentauth.org/problems/internal-payment-error';
+    constructor(options = {}) {
+        super('An internal payment error occurred.', { cause: options.cause });
+    }
+}
+/**
+ * Payment requires additional action (e.g., 3DS authentication).
+ */
+export class PaymentActionRequiredError extends PaymentError {
+    name = 'PaymentActionRequiredError';
+    title = 'Payment Action Required';
+    type = 'https://paymentauth.org/problems/payment-action-required';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Payment requires action: ${reason}.` : 'Payment requires action.');
+    }
+}
+/**
+ * Payment has expired.
+ */
+export class PaymentExpiredError extends PaymentError {
+    name = 'PaymentExpiredError';
+    title = 'Payment Expired';
+    type = 'https://paymentauth.org/problems/payment-expired';
+    constructor(options = {}) {
+        const { expires } = options;
+        super(expires ? `Payment expired at ${expires}.` : 'Payment has expired.');
+    }
+}
+/**
+ * A credential was sent, but the payment result could not be confirmed.
+ *
+ * Reconcile with `credential` (and `transactionHash` when the method can derive it)
+ * instead of retrying, which could pay twice.
+ */
+export class PaymentOutcomeUnknownError extends PaymentError {
+    name = 'PaymentOutcomeUnknownError';
+    title = 'Payment Outcome Unknown';
+    type = 'https://paymentauth.org/problems/payment-outcome-unknown';
+    /** Challenge the credential paid for. */
+    challenge;
+    /** Serialized credential sent with the paid request. */
+    credential;
+    /** On-chain hash the payment will have if it settled, when derivable from the credential. */
+    transactionHash;
+    constructor(options) {
+        const { cause, challenge, credential, transactionHash } = options;
+        super(`Payment outcome is unknown after sending a credential for challenge "${challenge.id}". Do not blindly retry.`, { cause });
+        this.challenge = challenge;
+        this.credential = credential;
+        this.transactionHash = transactionHash;
+    }
+}
+/**
+ * A server broadcast a payment transaction, the broadcast failed in a way that does not say whether
+ * the node accepted it, and no receipt appeared before settlement stopped polling. The transaction
+ * may still be included until `validBefore`.
+ *
+ * Settle it by looking up the receipt for `transactionHash`: once `validBefore` has passed, the
+ * transaction can no longer be included, so one lookup after it is final. This is not a
+ * `PaymentError`: HTTP handlers still answer with a generic 500 `InternalPaymentError`, whose
+ * `cause` is this error.
+ */
+export class BroadcastOutcomeUnknownError extends Error {
+    name = 'BroadcastOutcomeUnknownError';
+    /** Hash of the broadcast transaction, as it will appear on chain if it is included. */
+    transactionHash;
+    /** Unix time in seconds after which the transaction can no longer be included, when it expires. */
+    validBefore;
+    constructor(options) {
+        const { cause, transactionHash, validBefore } = options;
+        super(`Broadcast outcome is unknown for transaction ${transactionHash}. Look up its receipt before retrying.`);
+        this.transactionHash = transactionHash;
+        this.validBefore = validBefore;
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        if (cause !== undefined)
+            Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true });
+    }
+}
+/**
+ * A pre-broadcast simulation of a fee-sponsored payment failed, so the payment was not broadcast.
+ *
+ * `phase` says which simulation failed: `sender` runs the sender's calls before sponsorship, and
+ * `sponsored` runs the final envelope billed to `feePayer`. Callers use it, with `sender`,
+ * `feePayer` and `paymentToken`, to tell a payer's insufficient balance from a sponsor's without
+ * matching node messages. The node's error is the `cause`. This is not a `PaymentError`: HTTP
+ * handlers still answer with a generic 500 `InternalPaymentError`, whose `cause` is this error.
+ */
+export class PaymentSimulationError extends Error {
+    name = 'PaymentSimulationError';
+    /** Fee payer the sponsored simulation billed. Set only in the `sponsored` phase. */
+    feePayer;
+    /** TIP-20 token of a single `transfer` or `transferWithMemo` call, when the transaction is one. */
+    paymentToken;
+    /** Simulation that failed. */
+    phase;
+    /** Sender of the simulated transaction. */
+    sender;
+    constructor(options) {
+        const { cause, feePayer, paymentToken, phase, sender } = options;
+        super('Payment simulation failed');
+        this.feePayer = feePayer;
+        this.paymentToken = paymentToken;
+        this.phase = phase;
+        this.sender = sender;
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        if (cause !== undefined)
+            Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true });
+    }
+}
+/**
+ * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
+ * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
+ *
+ * Retry the same challenge with the same `tempo.charge` client to resume waiting without
+ * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ */
+export class ZoneSettlementPendingError extends Error {
+    name = 'ZoneSettlementPendingError';
+    /** ID of the challenge the withdrawal pays. */
+    challengeId;
+    /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
+    senderTag;
+    /** ID of the Zone the withdrawal left. */
+    zoneId;
+    constructor(options) {
+        const { cause, challengeId, senderTag, zoneId } = options;
+        super(`Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`);
+        this.challengeId = challengeId;
+        this.senderTag = senderTag;
+        this.zoneId = zoneId;
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        if (cause !== undefined)
+            Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true });
+    }
+}
+/**
+ * No credential was provided but payment is required.
+ */
+export class PaymentRequiredError extends PaymentError {
+    name = 'PaymentRequiredError';
+    title = 'Payment Required';
+    type = 'https://paymentauth.org/problems/payment-required';
+    hint = Hints.paymentRequired;
+    constructor(options = {}) {
+        const { description } = options;
+        const parts = ['Payment is required'];
+        if (description)
+            parts.push(`(${description})`);
+        super(`${parts.join(' ')}.`);
+    }
+}
+/**
+ * Credential payload does not match the expected schema.
+ */
+export class InvalidPayloadError extends PaymentError {
+    name = 'InvalidPayloadError';
+    title = 'Invalid Payload';
+    type = 'https://paymentauth.org/problems/invalid-payload';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Credential payload is invalid: ${reason}.` : 'Credential payload is invalid.');
+    }
+}
+/**
+ * Request is malformed or contains invalid parameters.
+ */
+export class BadRequestError extends PaymentError {
+    name = 'BadRequestError';
+    title = 'Bad Request';
+    status = 400;
+    type = 'https://paymentauth.org/problems/bad-request';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Bad request: ${reason}.` : 'Bad request.');
+    }
+}
+/**
+ * Payment amount is insufficient (too low).
+ */
+export class PaymentInsufficientError extends PaymentError {
+    name = 'PaymentInsufficientError';
+    title = 'Payment Insufficient';
+    type = 'https://paymentauth.org/problems/payment-insufficient';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Payment insufficient: ${reason}.` : 'Payment amount is insufficient.');
+    }
+}
+/**
+ * Payment method is not supported by the server.
+ */
+export class PaymentMethodUnsupportedError extends PaymentError {
+    name = 'PaymentMethodUnsupportedError';
+    title = 'Method Unsupported';
+    status = 400;
+    type = 'https://paymentauth.org/problems/method-unsupported';
+    hint = Hints.methodUnsupported;
+    constructor(options = {}) {
+        const { method } = options;
+        super(method ? `Payment method "${method}" is not supported.` : 'Payment method is not supported.');
+    }
+}
+/**
+ * Insufficient balance in the payment channel.
+ */
+export class InsufficientBalanceError extends PaymentError {
+    name = 'InsufficientBalanceError';
+    title = 'Insufficient Balance';
+    status = 402;
+    type = 'https://paymentauth.org/problems/session/insufficient-balance';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.');
+    }
+}
+/**
+ * Voucher or close request signature is invalid.
+ */
+export class InvalidSignatureError extends PaymentError {
+    name = 'InvalidSignatureError';
+    title = 'Invalid Signature';
+    status = 402;
+    type = 'https://paymentauth.org/problems/session/invalid-signature';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Invalid signature: ${reason}.` : 'Invalid signature.');
+    }
+}
+/**
+ * Recovered signer is not authorized for this channel.
+ */
+export class SignerMismatchError extends PaymentError {
+    name = 'SignerMismatchError';
+    title = 'Signer Mismatch';
+    status = 402;
+    type = 'https://paymentauth.org/problems/session/signer-mismatch';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Signer mismatch: ${reason}.` : 'Signer is not authorized for this channel.');
+    }
+}
+/**
+ * Voucher cumulative amount exceeds the channel deposit.
+ */
+export class AmountExceedsDepositError extends PaymentError {
+    name = 'AmountExceedsDepositError';
+    title = 'Amount Exceeds Deposit';
+    status = 402;
+    type = 'https://paymentauth.org/problems/session/amount-exceeds-deposit';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Amount exceeds deposit: ${reason}.` : 'Voucher amount exceeds channel deposit.');
+    }
+}
+/**
+ * Voucher amount increase is below the minimum delta.
+ */
+export class DeltaTooSmallError extends PaymentError {
+    name = 'DeltaTooSmallError';
+    title = 'Delta Too Small';
+    status = 402;
+    type = 'https://paymentauth.org/problems/session/delta-too-small';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Delta too small: ${reason}.` : 'Amount increase below minimum voucher delta.');
+    }
+}
+/**
+ * No channel with this ID exists.
+ */
+export class ChannelNotFoundError extends PaymentError {
+    name = 'ChannelNotFoundError';
+    title = 'Channel Not Found';
+    status = 410;
+    type = 'https://paymentauth.org/problems/session/channel-not-found';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Channel not found: ${reason}.` : 'No channel with this ID exists.');
+    }
+}
+/**
+ * Channel is closed or finalized.
+ */
+export class ChannelClosedError extends PaymentError {
+    name = 'ChannelClosedError';
+    title = 'Channel Closed';
+    status = 410;
+    type = 'https://paymentauth.org/problems/session/channel-finalized';
+    constructor(options = {}) {
+        const { reason } = options;
+        super(reason ? `Channel closed: ${reason}.` : 'Channel is closed.');
+    }
+}
+//# sourceMappingURL=Errors.js.map

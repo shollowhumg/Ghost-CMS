@@ -1,0 +1,76 @@
+import type * as http from 'node:http';
+import * as Replay from './internal/Replay.js';
+import * as Service from './Service.js';
+/** Options for {@link create.Config.replay}. */
+export type ReplayOptions = Replay.Options;
+/** A paid API proxy that gates upstream services behind the mppx 402 protocol. */
+export type Proxy = {
+    /** Fetch API handler. Works with Bun, Deno, Next.js, Hono, Elysia, SvelteKit, etc. */
+    fetch: (request: Request) => Promise<Response>;
+    /** Node.js request listener. Works with Express, Fastify, `http.createServer`, etc. */
+    listener: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+};
+/**
+ * Creates a paid API proxy.
+ *
+ * Routes incoming requests to upstream services, injects credentials,
+ * and requires payment via the mppx 402 protocol for non-free endpoints.
+ *
+ * @example
+ * ```ts
+ * import { Proxy, openai } from 'mppx/proxy'
+ * import { Mppx, tempo } from 'mppx/server'
+ *
+ * const mppx = Mppx.create({ methods: [tempo()] })
+ *
+ * const proxy = Proxy.create({
+ *   services: [
+ *     openai({
+ *       apiKey: 'sk-...',
+ *       routes: {
+ *         'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
+ *         'GET /v1/models': true,
+ *       },
+ *     }),
+ *   ],
+ * })
+ * ```
+ */
+export declare function create(config: create.Config): Proxy;
+export declare namespace create {
+    type Config = {
+        /** Base path prefix to strip before routing (e.g. `'/api/proxy'`). */
+        basePath?: string | undefined;
+        /** Free-form categories for root discovery metadata. */
+        categories?: string[] | undefined;
+        /** Short description of the proxy shown in `llms.txt`. */
+        description?: string | undefined;
+        /** Structured documentation links for root discovery metadata. */
+        docs?: Service.Docs | undefined;
+        /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
+        fetch?: typeof globalThis.fetch | undefined;
+        /** Maximum request body bytes on every route, including free routes. Defaults to 10 MiB. */
+        maxRequestBodySize?: number | undefined;
+        /** Default handler for failed upstream attempts. Services may override it. */
+        onUpstreamError?: Service.UpstreamErrorHandler | undefined;
+        /**
+         * Lets a payer collect a paid response after losing the connection.
+         *
+         * The paid upstream request runs detached from the client (its response must
+         * start within `ttl`), and its outcome is recorded under a key derived from the
+         * credential and the request's method, target and body. A retry with the
+         * same credential and request never pays again: it gets the stored
+         * response, `202` while the delivery runs, or, after a failed delivery, a
+         * new upstream attempt up to `maxAttempts`. Streamed (`text/event-stream`)
+         * and oversized responses are delivered but not stored. Off by default.
+         */
+        replay?: ReplayOptions | undefined;
+        /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
+        services: Service.Service[];
+        /** Human-readable title for the proxy shown in `llms.txt`. */
+        title?: string | undefined;
+        /** Version to include in the generated OpenAPI document. */
+        version?: string | undefined;
+    };
+}
+//# sourceMappingURL=Proxy.d.ts.map

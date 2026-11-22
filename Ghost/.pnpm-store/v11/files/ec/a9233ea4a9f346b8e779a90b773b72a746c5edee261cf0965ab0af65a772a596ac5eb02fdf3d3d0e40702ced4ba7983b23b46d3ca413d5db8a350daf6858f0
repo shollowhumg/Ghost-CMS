@@ -1,0 +1,47 @@
+{
+  "name": "@tryghost/custom-fonts",
+  "version": "1.0.15",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/SDK.git",
+    "directory": "packages/custom-fonts"
+  },
+  "author": "Ghost Foundation",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./build/cjs/index.js",
+  "module": "./build/esm/index.js",
+  "types": "./build/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./build/esm/index.js",
+      "require": "./build/cjs/index.js",
+      "types": "./build/types/index.d.ts"
+    }
+  },
+  "files": [
+    "build"
+  ],
+  "devDependencies": {
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.20.5",
+    "c8": "12.0.0",
+    "mocha": "12.0.3",
+    "sinon": "22.1.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "tsc --watch --preserveWatchOutput --sourceMap",
+    "build": "pnpm build:cjs && pnpm build:esm && pnpm build:types",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationDir ./build/types",
+    "build:cjs": "tsc -p tsconfig.json --outDir ./build/cjs --module CommonJS",
+    "build:esm": "tsc -p tsconfig.esm.json --outDir ./build/esm --module ES2020",
+    "build:ts": "pnpm build",
+    "test:unit": "NODE_ENV=testing c8 --src src --100 --reporter text --reporter cobertura mocha -r ts-node/register './test/**/*.test.ts'",
+    "test": "pnpm test:ts && pnpm test:unit",
+    "test:ts": "tsc --noEmit",
+    "lint": "eslint . --cache"
+  }
+}

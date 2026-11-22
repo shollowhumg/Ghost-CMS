@@ -1,0 +1,9 @@
+import type * as Identity from '../../../identity/Types.js';
+import type { VerificationResult } from './HttpMessageSignature.js';
+/** Maps a non-verified HTTP message signature result to an identity verification. */
+export declare function fromSignature(result: Exclude<VerificationResult, {
+    status: 'verified';
+}>): Exclude<Identity.Verification, {
+    status: 'valid';
+}>;
+//# sourceMappingURL=Verification.d.ts.map

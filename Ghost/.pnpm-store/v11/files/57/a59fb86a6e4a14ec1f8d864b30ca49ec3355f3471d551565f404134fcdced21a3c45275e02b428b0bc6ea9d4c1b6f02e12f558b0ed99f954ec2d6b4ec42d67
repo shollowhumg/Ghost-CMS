@@ -1,0 +1,185 @@
+import { z } from 'zod';
+export declare const upgradeVersionSchema: z.ZodString;
+export declare const upgradeJobIdSchema: z.ZodString;
+export declare const upgradeComponentSchema: z.ZodString;
+/** Deliberately public, plain-text diagnostics, rather than serialized exceptions. */
+export declare const upgradeDiagnosticSchema: z.ZodObject<{
+    source: z.ZodString;
+    code: z.ZodString;
+    severity: z.ZodEnum<{
+        error: "error";
+        info: "info";
+        warning: "warning";
+    }>;
+    message: z.ZodString;
+    details: z.ZodOptional<z.ZodString>;
+    help: z.ZodOptional<z.ZodURL>;
+}, z.core.$strip>;
+export declare const upgradeDiagnosticsSchema: z.ZodArray<z.ZodObject<{
+    source: z.ZodString;
+    code: z.ZodString;
+    severity: z.ZodEnum<{
+        error: "error";
+        info: "info";
+        warning: "warning";
+    }>;
+    message: z.ZodString;
+    details: z.ZodOptional<z.ZodString>;
+    help: z.ZodOptional<z.ZodURL>;
+}, z.core.$strip>>;
+/** An update the host can perform within its policy; Admin offers to run it. */
+export declare const oneClickUpdateSchema: z.ZodObject<{
+    component: z.ZodString;
+    fromVersion: z.ZodString;
+    toVersion: z.ZodString;
+}, z.core.$strip>;
+/** An update that needs steps on the host; Admin shows it as a notice. */
+export declare const manualUpdateSchema: z.ZodObject<{
+    component: z.ZodString;
+    fromVersion: z.ZodString;
+    toVersion: z.ZodString;
+    reason: z.ZodString;
+    steps: z.ZodArray<z.ZodString>;
+}, z.core.$strip>;
+export declare const upgradeStatusSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+    supported: z.ZodLiteral<false>;
+    reason: z.ZodEnum<{
+        "not-configured": "not-configured";
+        "not-supported": "not-supported";
+    }>;
+}, z.core.$strip>, z.ZodObject<{
+    supported: z.ZodLiteral<true>;
+    availability: z.ZodEnum<{
+        busy: "busy";
+        incompatible: "incompatible";
+        ready: "ready";
+        stale: "stale";
+        unavailable: "unavailable";
+    }>;
+    backupRequired: z.ZodOptional<z.ZodBoolean>;
+    currentVersion: z.ZodOptional<z.ZodString>;
+    oneClick: z.ZodDefault<z.ZodArray<z.ZodObject<{
+        component: z.ZodString;
+        fromVersion: z.ZodString;
+        toVersion: z.ZodString;
+    }, z.core.$strip>>>;
+    manual: z.ZodDefault<z.ZodArray<z.ZodObject<{
+        component: z.ZodString;
+        fromVersion: z.ZodString;
+        toVersion: z.ZodString;
+        reason: z.ZodString;
+        steps: z.ZodArray<z.ZodString>;
+    }, z.core.$strip>>>;
+    activeJobId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    pollAfterMs: z.ZodOptional<z.ZodInt>;
+    diagnostics: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        source: z.ZodString;
+        code: z.ZodString;
+        severity: z.ZodEnum<{
+            error: "error";
+            info: "info";
+            warning: "warning";
+        }>;
+        message: z.ZodString;
+        details: z.ZodOptional<z.ZodString>;
+        help: z.ZodOptional<z.ZodURL>;
+    }, z.core.$strip>>>;
+}, z.core.$strip>], "supported">;
+export declare const createUpgradeRequestSchema: z.ZodObject<{
+    component: z.ZodString;
+    toVersion: z.ZodString;
+    idempotencyKey: z.ZodCustomStringFormat<"sha256_hex">;
+}, z.core.$strict>;
+export declare const activeUpgradeStates: readonly ['pending', 'backing-up', 'pulling', 'restarting', 'verifying', 'restoring'];
+export declare const finalUpgradeStates: readonly ['done', 'restored', 'needs-operator', 'refused', 'interrupted'];
+export declare const upgradeJobSchema: z.ZodObject<{
+    id: z.ZodString;
+    state: z.ZodEnum<{
+        "backing-up": "backing-up";
+        done: "done";
+        interrupted: "interrupted";
+        "needs-operator": "needs-operator";
+        pending: "pending";
+        pulling: "pulling";
+        refused: "refused";
+        restarting: "restarting";
+        restored: "restored";
+        restoring: "restoring";
+        verifying: "verifying";
+    }>;
+    component: z.ZodString;
+    fromVersion: z.ZodOptional<z.ZodString>;
+    toVersion: z.ZodString;
+    createdAt: z.ZodISODateTime;
+    updatedAt: z.ZodISODateTime;
+    diagnostics: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        source: z.ZodString;
+        code: z.ZodString;
+        severity: z.ZodEnum<{
+            error: "error";
+            info: "info";
+            warning: "warning";
+        }>;
+        message: z.ZodString;
+        details: z.ZodOptional<z.ZodString>;
+        help: z.ZodOptional<z.ZodURL>;
+    }, z.core.$strip>>>;
+}, z.core.$strip>;
+/** Lookup distinguishes absent and expired records from temporary host failures. */
+export declare const upgradeJobResultSchema: z.ZodUnion<readonly [z.ZodObject<{
+    id: z.ZodString;
+    state: z.ZodEnum<{
+        "backing-up": "backing-up";
+        done: "done";
+        interrupted: "interrupted";
+        "needs-operator": "needs-operator";
+        pending: "pending";
+        pulling: "pulling";
+        refused: "refused";
+        restarting: "restarting";
+        restored: "restored";
+        restoring: "restoring";
+        verifying: "verifying";
+    }>;
+    component: z.ZodString;
+    fromVersion: z.ZodOptional<z.ZodString>;
+    toVersion: z.ZodString;
+    createdAt: z.ZodISODateTime;
+    updatedAt: z.ZodISODateTime;
+    diagnostics: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        source: z.ZodString;
+        code: z.ZodString;
+        severity: z.ZodEnum<{
+            error: "error";
+            info: "info";
+            warning: "warning";
+        }>;
+        message: z.ZodString;
+        details: z.ZodOptional<z.ZodString>;
+        help: z.ZodOptional<z.ZodURL>;
+    }, z.core.$strip>>>;
+}, z.core.$strip>, z.ZodObject<{
+    id: z.ZodString;
+    state: z.ZodLiteral<"unknown">;
+}, z.core.$strip>, z.ZodObject<{
+    id: z.ZodString;
+    state: z.ZodLiteral<"expired">;
+}, z.core.$strip>]>;
+export declare const upgradeErrorCodeSchema: z.ZodEnum<{
+    busy: "busy";
+    "idempotency-conflict": "idempotency-conflict";
+    "request-expired": "request-expired";
+    "target-unapproved": "target-unapproved";
+    unavailable: "unavailable";
+    unsupported: "unsupported";
+}>;
+export type UpgradeDiagnostic = z.infer<typeof upgradeDiagnosticSchema>;
+export type OneClickUpdate = z.infer<typeof oneClickUpdateSchema>;
+export type ManualUpdate = z.infer<typeof manualUpdateSchema>;
+export type UpgradeStatus = z.input<typeof upgradeStatusSchema>;
+export type CreateUpgradeRequest = z.infer<typeof createUpgradeRequestSchema>;
+export type UpgradeState = z.infer<typeof upgradeJobSchema>['state'];
+export type UpgradeJob = z.infer<typeof upgradeJobSchema>;
+export type UpgradeJobResult = z.infer<typeof upgradeJobResultSchema>;
+export type UpgradeErrorCode = z.infer<typeof upgradeErrorCodeSchema>;
+//# sourceMappingURL=schemas.d.ts.map

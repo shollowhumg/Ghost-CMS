@@ -1,0 +1,42 @@
+import type { PublicKeyJwk } from '../manifest/keys.ts';
+import { type PrivateKey } from './keys.ts';
+/** The `typ` a signed manifest's protected header carries, so no other signature passes as one. */
+export declare const SIGNED_MANIFEST_TYPE = "ghost-app-manifest";
+/** A signed manifest as an app serves it: flattened JWS JSON (RFC 7515, section 7.2.2). */
+export interface SignedManifest {
+    protected: string;
+    payload: string;
+    signature: string;
+}
+export type ReadSignedManifestResult = {
+    success: true;
+    signed: SignedManifest;
+    /** The manifest's exact text, as signed. Nothing in it is verified yet. */
+    payload: string;
+} | {
+    success: false;
+    error: string;
+};
+export type VerifyResult = {
+    success: true;
+} | {
+    success: false;
+    error: string;
+};
+/**
+ * Signs a manifest with an app's identity key. A string is signed as the exact text it is;
+ * anything else is signed as its JSON.
+ */
+export declare function signManifest(manifest: unknown, identityKey: PrivateKey): Promise<SignedManifest>;
+/**
+ * Reads the manifest out of a signed manifest, without verifying it. The key to verify it
+ * with is named inside the manifest, so the manifest has to be read and checked first;
+ * nothing in it may be used until `verifySignedManifest` has passed.
+ */
+export declare function readSignedManifest(body: unknown): ReadSignedManifestResult;
+/**
+ * Checks a signed manifest was signed with the identity key the manifest names, under
+ * exactly the protected header `readSignedManifest` accepts.
+ */
+export declare function verifySignedManifest(signed: SignedManifest, identityKey: PublicKeyJwk): Promise<VerifyResult>;
+//# sourceMappingURL=signed-manifest.d.ts.map

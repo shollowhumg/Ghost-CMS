@@ -1,0 +1,8 @@
+/**
+ * Return a unique identifier with the given `len`.
+ *
+ * @deprecated use secret.create() instead
+ * @param {Number} maxLength
+ * @return {String}
+ */
+export declare function uid(maxLength: number): string;

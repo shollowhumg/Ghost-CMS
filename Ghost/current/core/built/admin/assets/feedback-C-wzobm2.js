@@ -1,0 +1,2 @@
+(function(){try{var e=typeof globalThis<`u`?globalThis:typeof window<`u`?window:typeof global<`u`?global:typeof self<`u`?self:{},t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`8657c8df-5475-4c31-91b9-13c27f609eb3`,e._sentryDebugIdIdentifier=`sentry-dbid-8657c8df-5475-4c31-91b9-13c27f609eb3`)}catch{}})();import{i as e}from"./hooks-yIpCAKUO.js";var t=`FeedbackResponseType`,n=e({dataType:t,path:e=>`/feedback/${e}/`});export{n,t};
+//# debugId=8657c8df-5475-4c31-91b9-13c27f609eb3

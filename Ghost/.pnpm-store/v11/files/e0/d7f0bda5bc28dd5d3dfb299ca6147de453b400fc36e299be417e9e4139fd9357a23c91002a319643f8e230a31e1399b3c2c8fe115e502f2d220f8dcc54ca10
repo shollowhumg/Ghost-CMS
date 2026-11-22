@@ -1,0 +1,6 @@
+/**
+ * Returns the field refused in the body of a write of posts, pages or tags, such as
+ * `codeinjection_head`, or `undefined` when nothing is. Takes the body parsed from JSON.
+ */
+export declare function refusedContent(body: unknown): string | undefined;
+//# sourceMappingURL=content.d.ts.map

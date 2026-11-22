@@ -1,0 +1,330 @@
+import * as Constants from '../../../Constants.js';
+import * as Credential from '../../../Credential.js';
+import { createSessionReceipt, deserializeSessionReceipt, formatApplicationMessage, formatCloseReadyMessage, formatErrorMessage, formatNeedVoucherMessage, formatReceiptMessage, parseMessage, readSessionChallengeAmount, requireSessionCredentialContext, } from '../precompile/Protocol.js';
+import * as ChannelStore from './ChannelStore.js';
+import { meterIterable } from './MeteredStream.js';
+import { send, subscribe, toText, WebSocketOutboundBufferLimitError, } from './Transports.js';
+/** Public WebSocket payment frame helpers. */
+export { formatApplicationMessage, formatAuthorizationMessage, formatCloseReadyMessage, formatCloseRequestMessage, formatErrorMessage, formatNeedVoucherMessage, formatReceiptMessage, parseMessage, } from '../precompile/Protocol.js';
+/**
+ * Bridge a WebSocket connection to a Tempo session payment flow.
+ *
+ * Credential verification is performed by routing each in-band authorization
+ * frame through `route` as a **synthetic `POST` request** that carries only
+ * the `Authorization` header. The synthetic request does not include cookies,
+ * bodies, query parameters, or other headers from the original WebSocket
+ * upgrade request. Do not wrap `route` with middleware that depends on
+ * HTTP-specific context beyond the `Authorization` header.
+ */
+export async function serve(options) {
+    const { amount: expectedAmount, generate, maxIncomingMessageBytes = 64 * 1024, maxBufferedAmount = 1024 * 1024, pollIntervalMs = 100, route, socket, store: rawStore, url, } = options;
+    const store = 'getChannel' in rawStore ? rawStore : ChannelStore.fromStore(rawStore);
+    const requestUrl = normalizeHttpUrl(url);
+    const maxQueuedPaymentMessages = 32;
+    const sendFrame = (data) => send(socket, data, { maxBufferedAmount });
+    const abortController = new AbortController();
+    const runtime = {
+        closed: false,
+        closeReadySent: false,
+        closeRequestHandled: false,
+        closeRequested: false,
+        streamStarted: false,
+        streamTask: null,
+        streamContext: null,
+        action: Promise.resolve(),
+        queuedActions: 0,
+    };
+    const close = async (code = 1000, reason) => {
+        if (runtime.closed)
+            return;
+        runtime.closed = true;
+        abortController.abort();
+        unsubscribe();
+        await closeSocket(code, reason);
+    };
+    const closeSocket = async (code, reason) => {
+        try {
+            await socket.close(code, reason);
+        }
+        catch {
+            // Some adapters reject a close even after the session has stopped.
+            // Retry without application data and contain both sync and async errors.
+            try {
+                await socket.close();
+            }
+            catch { }
+        }
+    };
+    const rejectAndClose = (message, status, code) => {
+        runtime.closed = true;
+        abortController.abort();
+        unsubscribe();
+        // Queue the small final diagnostic synchronously before close changes socket state.
+        // Do not wait for an adapter's send promise: a stalled peer must still be closed.
+        try {
+            void Promise.resolve(socket.send(formatErrorMessage({ message, status }))).catch(() => { });
+        }
+        catch { }
+        void closeSocket(code, message);
+    };
+    const sendCloseReady = async () => {
+        if (runtime.closeReadySent || !runtime.streamContext || runtime.closed)
+            return;
+        runtime.closeReadySent = true;
+        const channel = await store.getChannel(runtime.streamContext.channelId);
+        if (!channel)
+            throw new Error('channel not found');
+        const receipt = createSessionReceipt({
+            challengeId: runtime.streamContext.challengeId,
+            channelId: runtime.streamContext.channelId,
+            acceptedCumulative: channel.highestVoucherAmount,
+            spent: channel.spent,
+            units: channel.units,
+        });
+        await sendFrame(formatCloseReadyMessage(receipt));
+    };
+    const runStream = async (context) => {
+        try {
+            for await (const value of meterIterable({
+                store,
+                channelId: context.channelId,
+                tickCost: context.tickCost,
+                generate,
+                beforeCharge: () => options.beforeCharge?.(context.channelId),
+                onChargeCommitted: options.onChargeCommitted ?? options.settleScheduled,
+                pollIntervalMs,
+                signal: abortController.signal,
+                emitNeedVoucher: (message) => sendFrame(message),
+                formatNeedVoucher: formatNeedVoucherMessage,
+            })) {
+                if (abortController.signal.aborted)
+                    break;
+                await sendFrame(formatApplicationMessage(value));
+            }
+            if (!abortController.signal.aborted)
+                await sendCloseReady();
+        }
+        catch (error) {
+            if (!abortController.signal.aborted) {
+                if (error instanceof WebSocketOutboundBufferLimitError) {
+                    await close(4008, 'outbound buffer limit exceeded').catch(() => { });
+                }
+                else {
+                    await sendFrame(formatErrorMessage({
+                        message: error instanceof Error ? error.message : 'websocket session failed',
+                        status: 500,
+                    })).catch(() => { });
+                    await close(1011, 'websocket session failed').catch(() => { });
+                }
+            }
+        }
+        finally {
+            runtime.streamTask = null;
+        }
+    };
+    const requestClose = async () => {
+        if (runtime.closed)
+            return;
+        if (runtime.closeRequestHandled)
+            return;
+        runtime.closeRequestHandled = true;
+        runtime.closeRequested = true;
+        abortController.abort();
+        await runtime.streamTask?.catch(() => { });
+        await sendCloseReady();
+    };
+    const processAuthorization = async (authorization) => {
+        if (runtime.closed)
+            return;
+        const credential = Credential.deserialize(authorization);
+        const payload = requireSessionCredentialContext(credential.payload);
+        if (payload.action === 'close')
+            runtime.closeRequested = true;
+        if (expectedAmount && credential.challenge.request.amount !== expectedAmount) {
+            await sendFrame(formatErrorMessage({
+                message: 'credential amount does not match this endpoint',
+                status: 402,
+            }));
+            await close(1008, 'credential amount does not match this endpoint');
+            return;
+        }
+        const authorizationResult = await authorizePaymentFrame({ authorization, requestUrl, route });
+        if (authorizationResult.status === 'rejected') {
+            await sendFrame(formatErrorMessage({
+                message: authorizationResult.message,
+                status: authorizationResult.responseStatus,
+            }));
+            await close(1008, 'payment authorization rejected');
+            return;
+        }
+        const { receipt } = authorizationResult;
+        const tickCost = expectedAmount !== undefined ? BigInt(expectedAmount) : authorizationResult.amount;
+        if (tickCost === undefined) {
+            await close(1008, 'WebSocket route must provide canonical pricing or an explicit amount');
+            return;
+        }
+        if (payload.action === 'voucher' && runtime.streamContext) {
+            runtime.streamContext.challengeId = credential.challenge.id;
+        }
+        await sendFrame(formatReceiptMessage(receipt));
+        if (payload.action === 'close') {
+            await close(1000, 'payment session closed');
+            return;
+        }
+        if (payload.action === 'topUp')
+            return;
+        if (runtime.streamStarted || runtime.closeRequested)
+            return;
+        runtime.streamStarted = true;
+        runtime.streamContext = {
+            challengeId: credential.challenge.id,
+            channelId: payload.channelId,
+            tickCost,
+        };
+        // Defer the first application frame until after the client receives the
+        // auth receipt and has a chance to install its own message listeners.
+        setTimeout(() => {
+            if (runtime.closeRequested || runtime.closed || !runtime.streamContext)
+                return;
+            runtime.streamTask = runStream(runtime.streamContext);
+        }, 0);
+    };
+    const onMessage = (payload) => {
+        if (runtime.closed)
+            return;
+        const messageBytes = frameByteLength(payload);
+        if (messageBytes !== null && messageBytes > maxIncomingMessageBytes) {
+            rejectAndClose('payment message is too large', 413, 1009);
+            return;
+        }
+        const raw = toText(payload);
+        if (!raw)
+            return;
+        const message = parseMessage(raw);
+        if (!message)
+            return;
+        if (message.mpp === 'payment-close-request') {
+            runtime.closeRequested = true;
+            abortController.abort();
+        }
+        const work = message.mpp === 'authorization'
+            ? () => processAuthorization(message.authorization)
+            : message.mpp === 'payment-close-request'
+                ? () => requestClose()
+                : null;
+        if (!work)
+            return;
+        if (runtime.queuedActions >= maxQueuedPaymentMessages) {
+            rejectAndClose('too many queued payment messages', 429, 1008);
+            return;
+        }
+        runtime.queuedActions++;
+        runtime.action = runtime.action
+            .then(async () => {
+            try {
+                if (runtime.closed)
+                    return;
+                await work();
+            }
+            finally {
+                runtime.queuedActions--;
+            }
+        })
+            .catch(async (error) => {
+            if (!runtime.closed) {
+                if (error instanceof WebSocketOutboundBufferLimitError) {
+                    await close(4008, 'outbound buffer limit exceeded').catch(() => { });
+                }
+                else {
+                    await sendFrame(formatErrorMessage({
+                        message: error instanceof Error ? error.message : 'invalid payment message',
+                        status: 400,
+                    })).catch(() => { });
+                    await close(1008, 'invalid payment message').catch(() => { });
+                }
+            }
+        });
+    };
+    const onClose = () => {
+        if (runtime.closed)
+            return;
+        runtime.closed = true;
+        abortController.abort();
+        unsubscribe();
+    };
+    const unsubscribe = subscribe(socket, {
+        close: onClose,
+        error: onClose,
+        message: onMessage,
+    });
+}
+function frameByteLength(value) {
+    if (value instanceof ArrayBuffer)
+        return value.byteLength;
+    if (ArrayBuffer.isView(value))
+        return value.byteLength;
+    if (typeof Blob !== 'undefined' && value instanceof Blob)
+        return value.size;
+    if (Array.isArray(value)) {
+        let bytes = 0;
+        for (const fragment of value) {
+            const fragmentBytes = frameByteLength(fragment);
+            if (fragmentBytes === null)
+                return null;
+            bytes += fragmentBytes;
+        }
+        return bytes;
+    }
+    if (typeof value !== 'string')
+        return null;
+    let bytes = 0;
+    for (let index = 0; index < value.length; index++) {
+        const codePoint = value.codePointAt(index);
+        if (codePoint <= 0x7f)
+            bytes += 1;
+        else if (codePoint <= 0x7ff)
+            bytes += 2;
+        else if (codePoint <= 0xffff)
+            bytes += 3;
+        else {
+            bytes += 4;
+            index += 1;
+        }
+    }
+    return bytes;
+}
+function normalizeHttpUrl(value) {
+    const url = new URL(value.toString());
+    if (url.protocol === 'ws:')
+        url.protocol = 'http:';
+    if (url.protocol === 'wss:')
+        url.protocol = 'https:';
+    return url.toString();
+}
+/** Verifies a WebSocket authorization frame and returns either a receipt or a payment error. */
+async function authorizePaymentFrame(parameters) {
+    const result = await parameters.route(new Request(parameters.requestUrl, {
+        method: 'POST',
+        headers: { [Constants.Headers.authorization]: parameters.authorization },
+    }));
+    if (result.status === 402) {
+        const response = result.challenge;
+        return {
+            status: 'rejected',
+            message: (await response.text().catch(() => '')) ||
+                response.statusText ||
+                'payment verification failed',
+            responseStatus: response.status,
+        };
+    }
+    const response = await result.withReceipt(new Response(null, { status: 204 }));
+    const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt);
+    if (!receiptHeader)
+        throw new Error('management response missing Payment-Receipt header');
+    return {
+        status: 'accepted',
+        amount: result.challenge ? readSessionChallengeAmount(result.challenge) : undefined,
+        receipt: deserializeSessionReceipt(receiptHeader),
+    };
+}
+//# sourceMappingURL=Ws.js.map

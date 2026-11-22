@@ -1,0 +1,50 @@
+const handlers = new WeakMap();
+const attempts = new WeakMap();
+const origins = new WeakMap();
+const transactionHashes = new WeakMap();
+/** Registers an internal response adapter without changing the public method shape. */
+export function register(method, handler) {
+    handlers.set(method, handler);
+    return method;
+}
+/** Removes response handling from a method whose caller owns the response lifecycle. */
+export function unregister(method) {
+    handlers.delete(method);
+}
+/** Adds response lifecycle state to internal credential parameters. */
+export function attachAttempt(method, parameters, attempt) {
+    if (handlers.has(method))
+        attempts.set(parameters, attempt);
+}
+/** Reads response lifecycle state when Fetch owns this credential. */
+export function getAttempt(parameters) {
+    return attempts.get(parameters);
+}
+/** Lets the selected client method handle a successful paid response. */
+export function handle(method, parameters) {
+    return Promise.resolve(handlers.get(method)?.(parameters) ?? parameters.response);
+}
+/** Registers credential hash derivation without changing the public method shape. */
+export function registerTransactionHash(method, derive) {
+    transactionHashes.set(method, derive);
+    return method;
+}
+/** Returns the credential's on-chain hash when its method can derive it. */
+export function getTransactionHash(method, credential) {
+    try {
+        return transactionHashes.get(method)?.(credential);
+    }
+    catch {
+        // Reconciliation metadata must never mask the payment outcome itself.
+        return undefined;
+    }
+}
+/** Associates an explicitly verified HTTP origin with credential creation. */
+export function attachOrigin(parameters, origin) {
+    origins.set(parameters, origin);
+}
+/** Returns the authorized origin for direct or fetch-owned credential creation. */
+export function getOrigin(parameters) {
+    return origins.get(parameters) ?? attempts.get(parameters)?.origin;
+}
+//# sourceMappingURL=MethodResponse.js.map

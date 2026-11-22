@@ -1,0 +1,25 @@
+import { z } from 'zod';
+/** The same limit as an app path. An Admin API path with its query fits easily within it. */
+export declare const FETCH_PATH_MAX_LENGTH = 2048;
+/** 1 MiB, in UTF-8 bytes. Bodies are JSON. */
+export declare const FETCH_BODY_MAX_BYTES: number;
+/**
+ * A request that an app asks Admin to make to the Admin API on its behalf. The path is never a
+ * URL: Admin resolves and checks it with `checkAdminApiRequest` before sending anything.
+ *
+ * Unknown fields are refused, so an option Admin doesn't support fails loudly instead of being
+ * silently left out of the request.
+ */
+export declare const FetchRequestSchema: z.ZodObject<{
+    path: z.ZodString & z.ZodType<string, string, z.core.$ZodTypeInternals<string, string>>;
+    method: z.ZodOptional<z.ZodEnum<{
+        DELETE: "DELETE";
+        GET: "GET";
+        POST: "POST";
+        PUT: "PUT";
+    }>>;
+    headers: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+    body: z.ZodOptional<z.ZodString>;
+}, z.core.$strict>;
+export type FetchRequest = z.infer<typeof FetchRequestSchema>;
+//# sourceMappingURL=fetch.d.ts.map

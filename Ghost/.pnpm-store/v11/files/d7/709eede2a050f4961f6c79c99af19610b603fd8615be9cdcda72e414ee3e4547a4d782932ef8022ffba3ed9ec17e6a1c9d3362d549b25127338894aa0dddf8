@@ -1,0 +1,37 @@
+{
+  "name": "@tryghost/bookshelf-plugins",
+  "version": "2.3.25",
+  "license": "MIT",
+  "author": "Ghost Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryGhost/framework.git",
+    "directory": "packages/bookshelf-plugins"
+  },
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "main": "index.js",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@tryghost/bookshelf-collision": "^2.3.23",
+    "@tryghost/bookshelf-custom-query": "^2.3.22",
+    "@tryghost/bookshelf-eager-load": "^2.3.23",
+    "@tryghost/bookshelf-filter": "^2.3.24",
+    "@tryghost/bookshelf-has-posts": "^2.4.23",
+    "@tryghost/bookshelf-include-count": "^2.3.23",
+    "@tryghost/bookshelf-order": "^2.3.22",
+    "@tryghost/bookshelf-pagination": "^2.4.17",
+    "@tryghost/bookshelf-search": "^2.3.22",
+    "@tryghost/bookshelf-transaction-events": "^2.3.22"
+  },
+  "scripts": {
+    "dev": "echo \"Implement me!\"",
+    "test": "NODE_ENV=testing vitest run --config ../../vitest.config.ts --root . --coverage",
+    "lint": "oxlint -c ../../.oxlintrc.json .",
+    "posttest": "pnpm run lint"
+  }
+}

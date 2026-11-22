@@ -1,0 +1,9 @@
+import { z } from 'zod';
+/**
+ * The title of the app's page. Admin shows it as its own title while the page is open, as
+ * "{title} · {app name}". Admin only ever sets it as text, but a character that reorders text
+ * could still make the app's name read backwards, so a title must follow the same plain-text
+ * rule as an app's name. An empty title is allowed: Admin then shows only the app's name.
+ */
+export declare const TitleSchema: z.ZodString;
+//# sourceMappingURL=title.d.ts.map
